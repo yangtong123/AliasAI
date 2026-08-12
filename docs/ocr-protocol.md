@@ -316,6 +316,19 @@ Node
 
 Then replace the mock OCR adapter with PaddleOCR while preserving Protocol v1.
 
+## Native PDF Worker
+
+`python/document_parser/native_worker.py` is the first real Protocol v1 adapter. It uses
+`pdfminer.six` locally to stream native PDF text as `page_result` events. Each text block has
+deterministic page-local identity, reading order, PDF page rotation, and a page-relative
+normalized bounding box. It never writes application tables or returns the source path.
+
+The native worker currently emits only `TEXT` blocks with source `NATIVE`. Image-only
+pages are identified as `RASTER` and mixed native/image pages as `MIXED`; OCR remains a
+separate adapter and is not silently simulated by this worker. If OCR is requested for
+an image-only page before that adapter is available, the worker terminates the job with
+an explicit `OCR_ENGINE_FAILURE` event.
+
 ## OCR Evaluation Principle
 
 AliasAI is not optimizing only for OCR character error rate.

@@ -3,6 +3,7 @@ name = "aliasai-python"
 version = "0.0.0"
 description = "Local Python worker contracts for AliasAI."
 requires-python = ">=3.11"
+dependencies = ["pdfminer.six>=20260107,<20270000"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
