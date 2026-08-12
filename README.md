@@ -1,6 +1,6 @@
 # AliasAI
 
-Local-first, privacy-preserving AI workspace. This repository contains the tested V1 foundation: a sandboxed Electron/React desktop shell, pure domain contracts, encrypted SQLite persistence, local document inspection, and a native PDF parser that streams the normalized Document Model over the local Python worker protocol.
+Local-first, privacy-preserving AI workspace. This repository contains the tested V1 foundation: a sandboxed Electron/React desktop shell, pure domain contracts, encrypted SQLite persistence, local document inspection, and an engine-independent application service that persists native PDF Document Models from the local Python worker.
 
 ## Development
 
@@ -29,7 +29,7 @@ Install the Python parser and test dependencies with `python3 -m pip install -e 
 - `packages/rehydration`: Public Token-anchored local restoration.
 - `packages/ai`: reserved sanitized provider boundary; no provider integration exists yet.
 - `packages/python-bridge`: validated JSON Lines Protocol v1 client with mock and native-PDF worker contract tests.
-- `packages/application`: encrypted Matter/document workflows and atomic Entity creation orchestration.
+- `packages/application`: encrypted Matter/document workflows, engine-independent Document processing, and atomic Entity creation orchestration.
 - `python/document_parser`: native PDF text extraction plus a protocol mock; parser output contains pages and normalized text blocks only.
 - `python/ocr`, `python/ner`, `python/image_processing`: replaceable package boundaries; no OCR or ML implementation exists yet.
 

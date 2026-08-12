@@ -8,6 +8,7 @@
     "@aliasai/crypto": "workspace:*",
     "@aliasai/database": "workspace:*",
     "@aliasai/document": "workspace:*",
-    "@aliasai/domain": "workspace:*"
+    "@aliasai/domain": "workspace:*",
+    "@aliasai/python-bridge": "workspace:*"
   }
 }

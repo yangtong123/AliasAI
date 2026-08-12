@@ -87,6 +87,15 @@ Index:
 
 - `idx_blocks_page_order(page_id, reading_order)`
 
+Block text is encrypted in the application layer before repository insertion. The V1
+authenticated context is `<block-id>:documentBlock.text`, preventing ciphertext from
+being moved between Block rows without authentication failure.
+
+The Document processing repository commits the complete Page/Block model and the final
+`documents.parse_status = 'PARSED'` update in one SQLite transaction. A failed commit
+must not leave partial Pages or Blocks; the application subsequently records the
+Document as `FAILED`.
+
 ### mentions
 
 | Column | Type | Constraints |

@@ -103,3 +103,5 @@ export class EntityService {
     return { entity: created.entity, alias: created.primaryAlias }
   }
 }
+
+export * from './document-processing'

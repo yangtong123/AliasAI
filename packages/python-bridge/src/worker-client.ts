@@ -12,11 +12,14 @@ import {
 export interface PythonWorkerClientOptions {
   readonly command: string
   readonly args: readonly string[]
-  readonly onEvent?: (event: WorkerEvent) => void | Promise<void>
+  readonly onEvent?: WorkerEventHandler
 }
+
+export type WorkerEventHandler = (event: WorkerEvent) => void | Promise<void>
 
 interface PendingJob {
   readonly documentId: string
+  readonly onEvent?: WorkerEventHandler
   readonly resolve: (event: WorkerTerminalEvent) => void
   readonly reject: (error: Error) => void
 }
@@ -54,8 +57,8 @@ export class PythonWorkerClient {
     })
   }
 
-  processDocument(request: ProcessDocumentRequest): Promise<WorkerTerminalEvent> {
-    return this.sendAndWait(processDocumentRequestSchema.parse(request))
+  processDocument(request: ProcessDocumentRequest, onEvent?: WorkerEventHandler): Promise<WorkerTerminalEvent> {
+    return this.sendAndWait(processDocumentRequestSchema.parse(request), onEvent)
   }
 
   cancelJob(jobId: string): void {
@@ -71,13 +74,18 @@ export class PythonWorkerClient {
     child.kill()
   }
 
-  private sendAndWait(request: ProcessDocumentRequest): Promise<WorkerTerminalEvent> {
+  private sendAndWait(request: ProcessDocumentRequest, onEvent?: WorkerEventHandler): Promise<WorkerTerminalEvent> {
     if (this.pendingJobs.has(request.jobId)) {
       throw new Error(`A Python worker job is already pending for ${request.jobId}`)
     }
 
     return new Promise<WorkerTerminalEvent>((resolve, reject) => {
-      this.pendingJobs.set(request.jobId, { documentId: request.documentId, resolve, reject })
+      this.pendingJobs.set(request.jobId, {
+        documentId: request.documentId,
+        ...(onEvent === undefined ? {} : { onEvent }),
+        resolve,
+        reject
+      })
       try {
         this.write(request)
       } catch (error) {
@@ -118,6 +126,7 @@ export class PythonWorkerClient {
 
     try {
       await this.options.onEvent?.(event)
+      await pending.onEvent?.(event)
     } catch {
       this.failChild(child, new Error('Python worker event handler failed'))
       return

@@ -74,6 +74,17 @@ interface Document {
 }
 ```
 
+Initial parsing state transitions are:
+
+```text
+IMPORTED -> PARSING -> PARSED
+                 `-> FAILED -> PARSING
+```
+
+Only the application service changes parsing state. Parser/OCR workers return Protocol
+v1 data and never persist or update the Document directly. A successful transition to
+`PARSED` requires a complete, contiguous page sequence and an atomic Page/Block commit.
+
 ## DocumentPage
 
 One logical page in a Document.
@@ -125,6 +136,8 @@ interface DocumentBlock {
 ```
 
 The persisted block text is encrypted. Parser/OCR produces Blocks and never creates Entities.
+V1 block encryption binds the ciphertext to the application-generated Block ID with
+AES-GCM additional authenticated data; worker-local block IDs are never database IDs.
 
 ## Mention
 

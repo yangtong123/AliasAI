@@ -1,8 +1,23 @@
-import { and, eq } from 'drizzle-orm'
-import type { Document, Entity, EntityAlias, Matter, ResolutionEvent } from '@aliasai/domain'
-import { assertDocument, assertEntity, assertEntityAlias, assertSameMatter } from '@aliasai/domain'
+import { and, eq, inArray } from 'drizzle-orm'
+import type {
+  Document,
+  DocumentBlock,
+  DocumentPage,
+  Entity,
+  EntityAlias,
+  Matter,
+  ResolutionEvent
+} from '@aliasai/domain'
+import {
+  assertDocument,
+  assertDocumentBlock,
+  assertDocumentPage,
+  assertEntity,
+  assertEntityAlias,
+  assertSameMatter
+} from '@aliasai/domain'
 import type { AliasAiDatabase } from './client'
-import { documents, entities, entityAliases, matters, resolutionEvents } from './schema'
+import { documentBlocks, documentPages, documents, entities, entityAliases, matters, resolutionEvents } from './schema'
 
 export interface CreateMatterInput {
   readonly id: string
@@ -23,6 +38,29 @@ export interface CreateDocumentInput {
   readonly pageCount?: number
   readonly parseStatus: Document['parseStatus']
   readonly createdAt: number
+  readonly updatedAt: number
+}
+
+export interface DocumentProcessingSource {
+  readonly document: Document
+  readonly sourcePathCipher?: Buffer
+}
+
+export interface CreateDocumentPageInput extends DocumentPage {
+  readonly createdAt: number
+}
+
+export interface CreateDocumentBlockInput extends DocumentBlock {
+  readonly textCipher: Buffer
+  readonly createdAt: number
+}
+
+export interface CompleteDocumentProcessingInput {
+  readonly documentId: string
+  readonly parserType: string
+  readonly pageCount: number
+  readonly pages: readonly CreateDocumentPageInput[]
+  readonly blocks: readonly CreateDocumentBlockInput[]
   readonly updatedAt: number
 }
 
@@ -88,19 +126,168 @@ export class DocumentRepository {
       .from(documents)
       .where(and(eq(documents.matterId, matterId), eq(documents.fileHash, fileHash)))
       .get()
-    if (row === undefined) return undefined
+    return row === undefined ? undefined : toDocument(row)
+  }
 
+  findById(id: string): Document | undefined {
+    const row = this.db.select().from(documents).where(eq(documents.id, id)).get()
+    return row === undefined ? undefined : toDocument(row)
+  }
+
+  findProcessingSource(id: string): DocumentProcessingSource | undefined {
+    const row = this.db.select().from(documents).where(eq(documents.id, id)).get()
+    if (row === undefined) return undefined
     return {
-      id: row.id,
-      matterId: row.matterId,
-      fileHash: row.fileHash,
-      mimeType: row.mimeType,
-      ...(row.pageCount === null ? {} : { pageCount: row.pageCount }),
-      ...(row.parserType === null ? {} : { parserType: row.parserType }),
-      parseStatus: row.parseStatus,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt
+      document: toDocument(row),
+      ...(row.sourcePathCipher === null ? {} : { sourcePathCipher: row.sourcePathCipher })
     }
+  }
+
+  markProcessing(documentId: string, parserType: string, updatedAt: number): Document {
+    if (parserType.trim().length === 0) throw new Error('parserType must not be empty')
+    const current = this.findById(documentId)
+    if (current === undefined) throw new Error('Document was not found')
+    if (updatedAt < current.updatedAt) throw new Error('Document processing timestamp must not move backwards')
+
+    const result = this.db
+      .update(documents)
+      .set({ parseStatus: 'PARSING', parserType, pageCount: null, updatedAt })
+      .where(
+        and(
+          eq(documents.id, documentId),
+          inArray(documents.parseStatus, ['IMPORTED', 'FAILED'])
+        )
+      )
+      .run()
+    if (result.changes !== 1) throw new Error('Document is not available for processing')
+    return this.requireById(documentId)
+  }
+
+  markProcessingFailed(documentId: string, updatedAt: number): Document {
+    const current = this.findById(documentId)
+    if (current === undefined) throw new Error('Document was not found')
+    if (updatedAt < current.updatedAt) throw new Error('Document processing timestamp must not move backwards')
+
+    const result = this.db
+      .update(documents)
+      .set({ parseStatus: 'FAILED', pageCount: null, updatedAt })
+      .where(and(eq(documents.id, documentId), eq(documents.parseStatus, 'PARSING')))
+      .run()
+    if (result.changes !== 1) throw new Error('Document is not currently processing')
+    return this.requireById(documentId)
+  }
+
+  completeProcessing(input: CompleteDocumentProcessingInput): Document {
+    if (input.parserType.trim().length === 0) throw new Error('parserType must not be empty')
+    if (!Number.isSafeInteger(input.pageCount) || input.pageCount < 1) {
+      throw new Error('pageCount must be a positive safe integer')
+    }
+    if (input.pages.length !== input.pageCount) throw new Error('pageCount must match the persisted pages')
+
+    const pageIds = new Set<string>()
+    const pageNumbers = new Set<number>()
+    for (const page of input.pages) {
+      assertDocumentPage(page)
+      if (page.documentId !== input.documentId) throw new Error('Page must belong to the processed Document')
+      if (pageIds.has(page.id) || pageNumbers.has(page.pageNo)) throw new Error('Document pages must be unique')
+      pageIds.add(page.id)
+      pageNumbers.add(page.pageNo)
+    }
+    for (let pageNo = 1; pageNo <= input.pageCount; pageNo += 1) {
+      if (!pageNumbers.has(pageNo)) throw new Error('Document pages must form a complete sequence')
+    }
+
+    const blockIds = new Set<string>()
+    for (const block of input.blocks) {
+      assertDocumentBlock(block)
+      if (block.documentId !== input.documentId || !pageIds.has(block.pageId)) {
+        throw new Error('Block must belong to a persisted Document page')
+      }
+      if (blockIds.has(block.id)) throw new Error('Document blocks must have unique IDs')
+      blockIds.add(block.id)
+    }
+
+    return this.db.transaction((transaction) => {
+      const current = transaction.select().from(documents).where(eq(documents.id, input.documentId)).get()
+      if (current === undefined) throw new Error('Document was not found')
+      if (current.parseStatus !== 'PARSING') throw new Error('Document is not currently processing')
+      if (input.updatedAt < current.updatedAt) throw new Error('Document processing timestamp must not move backwards')
+
+      transaction
+        .insert(documentPages)
+        .values(
+          input.pages.map((page) => ({
+            id: page.id,
+            documentId: page.documentId,
+            pageNo: page.pageNo,
+            originalWidth: page.originalWidth,
+            originalHeight: page.originalHeight,
+            rotation: page.rotation,
+            sourceType: page.sourceType,
+            createdAt: page.createdAt
+          }))
+        )
+        .run()
+      if (input.blocks.length > 0) {
+        transaction
+          .insert(documentBlocks)
+          .values(
+            input.blocks.map((block) => ({
+              id: block.id,
+              documentId: block.documentId,
+              pageId: block.pageId,
+              blockType: block.blockType,
+              textCipher: block.textCipher,
+              source: block.source,
+              ...(block.confidence === undefined ? {} : { confidence: block.confidence }),
+              x: block.bbox.x,
+              y: block.bbox.y,
+              width: block.bbox.width,
+              height: block.bbox.height,
+              readingOrder: block.readingOrder,
+              createdAt: block.createdAt
+            }))
+          )
+          .run()
+      }
+      const result = transaction
+        .update(documents)
+        .set({
+          parserType: input.parserType,
+          pageCount: input.pageCount,
+          parseStatus: 'PARSED',
+          updatedAt: input.updatedAt
+        })
+        .where(and(eq(documents.id, input.documentId), eq(documents.parseStatus, 'PARSING')))
+        .run()
+      if (result.changes !== 1) throw new Error('Document processing state changed before completion')
+
+      const completed = transaction.select().from(documents).where(eq(documents.id, input.documentId)).get()
+      if (completed === undefined) throw new Error('Completed Document was not found')
+      return toDocument(completed)
+    })
+  }
+
+  private requireById(id: string): Document {
+    const document = this.findById(id)
+    if (document === undefined) throw new Error('Document was not found')
+    return document
+  }
+}
+
+type DocumentRow = typeof documents.$inferSelect
+
+function toDocument(row: DocumentRow): Document {
+  return {
+    id: row.id,
+    matterId: row.matterId,
+    fileHash: row.fileHash,
+    mimeType: row.mimeType,
+    ...(row.pageCount === null ? {} : { pageCount: row.pageCount }),
+    ...(row.parserType === null ? {} : { parserType: row.parserType }),
+    parseStatus: row.parseStatus,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
   }
 }
 

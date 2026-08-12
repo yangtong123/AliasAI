@@ -154,6 +154,22 @@ Primary Alias: 原告甲
 
 OCR/parser produces a Document Model only. It has no authority to create or merge Entities.
 
+`DocumentProcessingService` depends on a Protocol v1 `DocumentProcessor` port rather
+than a concrete native parser or OCR library. The first adapter launches the native PDF
+worker; a future OCR adapter can satisfy the same port without changing application
+or persistence logic.
+
+Worker `page_result` plaintext is encrypted by the application as soon as it crosses
+the protocol boundary. The application retains encrypted persistence inputs until a
+valid full-document `completed` event arrives, then atomically inserts all Pages and
+Blocks and changes the Document from `PARSING` to `PARSED`. Worker, validation, or
+database failures leave no partial Document Model and transition the Document to
+`FAILED`.
+
+Before dispatch and again before commit, the application verifies that the source file
+still matches the SHA-256 fingerprint captured at import. A changed source is never
+persisted under the original Document identity.
+
 ### Resolution is proposal-driven
 
 Entity Resolution produces explainable proposals. Application services own mutations and event recording.
