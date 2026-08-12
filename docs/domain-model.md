@@ -92,7 +92,8 @@ interface DocumentPage {
 
 ## Normalized Bounding Box
 
-All persisted page coordinates use page-relative values in `[0, 1]`.
+All persisted page coordinates use page-relative values in `[0, 1]`, with
+`x + width <= 1` and `y + height <= 1` so the full rectangle remains on-page.
 
 ```ts
 interface NormalizedBBox {
@@ -199,7 +200,9 @@ Rules:
 
 - Entity does not store a plaintext real name.
 - Public Token is immutable.
-- A merged Entity remains addressable and redirects to a canonical Entity.
+- Generated Public Tokens use at least 64 bits of cryptographic randomness and never encode identity data.
+- A merged Entity remains addressable and redirects to an active Entity in the same Matter.
+- Redirects must never form a cycle; restoration follows any historic redirect chain to its active canonical Entity.
 
 ## EntityAlias
 
@@ -446,3 +449,8 @@ Restored text:
 ```text
 张伟应进一步证明签约权限。
 ```
+
+Rehydration resolves both wrapped and bare Public Tokens. For wrapped output,
+the local mapping also supplies current and historic aliases so only the exact
+`Alias〔@TOKEN〕` span is replaced; an unknown token or unexpectedly edited
+alias remains visible for review rather than consuming surrounding AI text.

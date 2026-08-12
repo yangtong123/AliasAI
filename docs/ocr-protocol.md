@@ -147,7 +147,9 @@ The TypeScript side owns application IDs/persistence. `localId` is only for rela
 
 ## Bounding Box
 
-Protocol bbox is always page-relative normalized coordinates:
+Protocol bbox is always page-relative normalized coordinates. Every component
+is in `[0, 1]`, and `x + width <= 1` and `y + height <= 1` keep the full
+rectangle on-page:
 
 ```text
 x, y, width, height in [0,1]

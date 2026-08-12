@@ -1,0 +1,20 @@
+[project]
+name = "aliasai-python"
+version = "0.0.0"
+description = "Local Python worker contracts for AliasAI."
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+
+[tool.setuptools.packages.find]
+where = ["python"]
+include = ["document_parser*", "ocr*", "ner*", "image_processing*"]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
+pythonpath = ["python"]
+addopts = "-ra"

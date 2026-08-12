@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.vite/
+coverage/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pnpm-store/
+*.sqlite
+*.sqlite3
+*.db
+.DS_Store
+
+# Local documents and keys must never enter source control.
+data/
+*.pem
+*.key

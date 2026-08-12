@@ -1,0 +1,16 @@
+packages:
+  - apps/*
+  - packages/*
+
+overrides:
+  esbuild@<=0.24.2: 0.25.0
+
+# Native dependencies used by the desktop runtime download or build local binaries.
+allowBuilds:
+  better-sqlite3: true
+  electron: true
+  esbuild: true
+
+# Electron 43.4.0 is the audited security release selected for this bootstrap.
+minimumReleaseAgeExclude:
+  - electron@43.4.0

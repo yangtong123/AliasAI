@@ -335,7 +335,7 @@ V1 encryption target: AES-256-GCM.
 3. An Entity merge must preserve the source Entity and source Public Token.
 4. Alias uniqueness is Matter-local.
 5. Protected value exact-match uniqueness is Matter-local and value-type-local.
-6. ResolutionEvents are append-only from application perspective.
+6. ResolutionEvents are append-only at both the application and SQLite boundaries.
 7. Raw plaintext sensitive fields must not be persisted in auxiliary debug tables.
 8. Parser/OCR worker state belongs to ProcessingJob/Document Model, not Entity tables.
 

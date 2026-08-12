@@ -1,0 +1,30 @@
+{
+  "name": "@aliasai/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "pnpm run build:preload && concurrently -k \"vite --config renderer/vite.config.ts\" \"wait-on http://127.0.0.1:5173 && cross-env ALIASAI_RENDERER_URL=http://127.0.0.1:5173 electron --import tsx main/src/index.ts\"",
+    "start": "electron .",
+    "build": "pnpm run build:main && pnpm run build:preload && pnpm run build:renderer",
+    "build:main": "tsc --project main/tsconfig.build.json",
+    "build:preload": "tsc --project preload/tsconfig.build.json && node scripts/finalize-preload.mjs",
+    "build:renderer": "vite build --config renderer/vite.config.ts"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.2",
+    "electron": "^43.4.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "vite": "^7.1.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "concurrently": "^9.2.1",
+    "cross-env": "^7.0.3",
+    "tsx": "^4.20.4",
+    "wait-on": "^8.0.3"
+  }
+}

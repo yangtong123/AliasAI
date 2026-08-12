@@ -1,0 +1,13 @@
+{
+  "name": "@aliasai/application",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@aliasai/crypto": "workspace:*",
+    "@aliasai/database": "workspace:*",
+    "@aliasai/document": "workspace:*",
+    "@aliasai/domain": "workspace:*"
+  }
+}
