@@ -96,6 +96,10 @@ The Document processing repository commits the complete Page/Block model and the
 must not leave partial Pages or Blocks; the application subsequently records the
 Document as `FAILED`.
 
+Once a Document Model exists, a downstream detection failure does not make it
+eligible for parsing again. The latest `DETECT` ProcessingJob distinguishes a
+detection retry from a parser retry while retaining the encrypted Pages and Blocks.
+
 ### mentions
 
 | Column | Type | Constraints |
@@ -128,6 +132,19 @@ Indexes:
 - `idx_mentions_matter_type(matter_id, mention_type)`
 - `idx_mentions_entity(entity_id)`
 - `idx_mentions_protected_value(protected_value_id)`
+
+Mention text uses the authenticated encryption context
+`<mention-id>:mention.text`. Privacy detection reads encrypted Blocks only after an
+atomic `PARSED -> DETECTING` transition. It then atomically inserts the full Mention
+batch, completes its ProcessingJob, and changes the Document to `DETECTED`. Boundary
+triggers continue to enforce matching Matter, Document, Page, and Block ownership.
+Detection never sets `entity_id` or `protected_value_id`.
+
+The V1 rule-detection workflow intentionally leaves `fingerprint` null. A Mention
+fingerprint requires both type-specific value normalization and a Matter-scoped
+search-key resolver; neither contract is defined at this stage. The persistence key
+must not be reused as the search key. Entity Resolution work must define those
+contracts before computing or backfilling Mention fingerprints.
 
 ### entities
 
@@ -324,6 +341,14 @@ Indexes:
 
 - `idx_processing_jobs_document(document_id)`
 - `idx_processing_jobs_status(status)`
+
+ProcessingJob type, status, progress, timestamps, and encrypted-error presence are
+checked by SQLite. A running `DETECT` job has `started_at` and no terminal timestamp;
+a completed job has progress `1`; a failed job has `finished_at` and a non-null
+encrypted error. Detection checkpoints are non-sensitive block counts only.
+
+The error payload uses authenticated context
+`<job-id>:processingJob.error` and stores only a stable application error code.
 
 ## Encryption Envelope
 

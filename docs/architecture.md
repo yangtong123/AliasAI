@@ -127,6 +127,23 @@ Rehydration
 Local Real-Identity Result
 ```
 
+Privacy Detection is an application-owned orchestration boundary. A replaceable
+detector receives one transient decrypted Block and returns location/type proposals
+scoped to that exact Matter, Document, Page, and Block. V1 uses deterministic regex
+rules for high-precision structured identifiers. The detector cannot persist and
+does not create Entities; the application validates offsets, encrypts Mention text,
+and commits the complete Mention batch with its DETECT ProcessingJob transaction.
+
+The current native-PDF path is therefore:
+
+```text
+Native PDF Worker -> encrypted Document Blocks -> PrivacyDetector
+                  -> encrypted unassigned Mentions -> SQLite
+```
+
+OCR and NER can implement the existing parser/detector ports later without changing
+the persistence workflow.
+
 ## Key Architectural Decisions
 
 ### Matter is the privacy boundary

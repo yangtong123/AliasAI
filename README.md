@@ -1,6 +1,6 @@
 # AliasAI
 
-Local-first, privacy-preserving AI workspace. This repository contains the tested V1 foundation: a sandboxed Electron/React desktop shell, pure domain contracts, encrypted SQLite persistence, local document inspection, and an engine-independent application service that persists native PDF Document Models from the local Python worker.
+Local-first, privacy-preserving AI workspace. This repository contains the tested V1 foundation: a sandboxed Electron/React desktop shell, pure domain contracts, encrypted SQLite persistence, local document inspection, an engine-independent native PDF processing service, and an encrypted Privacy Detection application workflow.
 
 ## Development
 
@@ -23,14 +23,21 @@ Install the Python parser and test dependencies with `python3 -m pip install -e 
 - `packages/database`: SQLite/Drizzle schema, migration, integrity guards, and initial repositories.
 - `packages/crypto`: versioned AES-256-GCM envelopes and Matter-scoped HMAC fingerprints; key storage is deferred to the desktop application layer.
 - `packages/document`: non-destructive local source inspection and SHA-256 file fingerprints.
-- `packages/privacy-detection`: deterministic regex-based Block-to-Mention proposals using synthetic tests.
+- `packages/privacy-detection`: pluggable, plaintext-free location proposals with deterministic high-precision V1 rules.
 - `packages/entity-resolution`: explainable, rule-first proposal gate; it never applies identity mutations.
 - `packages/pseudonymization`: offset-based sanitized text formatting without raw global replacement.
 - `packages/rehydration`: Public Token-anchored local restoration.
 - `packages/ai`: reserved sanitized provider boundary; no provider integration exists yet.
 - `packages/python-bridge`: validated JSON Lines Protocol v1 client with mock and native-PDF worker contract tests.
-- `packages/application`: encrypted Matter/document workflows, engine-independent Document processing, and atomic Entity creation orchestration.
+- `packages/application`: encrypted Matter/document workflows, engine-independent Document processing, transactional Privacy Detection, and atomic Entity creation orchestration.
 - `python/document_parser`: native PDF text extraction plus a protocol mock; parser output contains pages and normalized text blocks only.
 - `python/ocr`, `python/ner`, `python/image_processing`: replaceable package boundaries; no OCR or ML implementation exists yet.
 
 No sensitive document, key, database, or generated runtime data should be committed.
+
+`PrivacyDetectionService` decrypts one persisted Block at a time, runs the replaceable
+V1 detector, encrypts Mention text, and atomically persists unassigned Mentions with
+the DETECT ProcessingJob and Document state. Successful calls are idempotent;
+failures retain no partial Mentions and can be retried. End-to-end tests exercise a
+real synthetic PDF through the native Python Worker into encrypted Blocks and
+encrypted Mentions. NER, OCR, and AI remain outside this implementation.

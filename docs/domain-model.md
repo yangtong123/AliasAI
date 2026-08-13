@@ -85,6 +85,19 @@ Only the application service changes parsing state. Parser/OCR workers return Pr
 v1 data and never persist or update the Document directly. A successful transition to
 `PARSED` requires a complete, contiguous page sequence and an atomic Page/Block commit.
 
+Privacy detection extends the state machine without coupling the application to a
+specific detection engine:
+
+```text
+PARSED -> DETECTING -> DETECTED
+                   `-> FAILED -> DETECTING
+```
+
+A `FAILED` Document is retried according to its latest `ProcessingJob`: parsing
+failures may retry parsing, while detection failures retain the persisted Document
+Model and may retry detection. A completed detection is idempotent and reuses its
+existing Mention set rather than creating duplicate jobs or Mentions.
+
 ## DocumentPage
 
 One logical page in a Document.
@@ -187,6 +200,12 @@ Rules:
 - A Mention may exist without an Entity.
 - At most one current Entity assignment per Mention.
 - Reference mentions should not automatically create canonical Entities without sufficient evidence.
+- Privacy detectors return Matter/Document/Page/Block-scoped location proposals; they do not return or persist plaintext.
+- The application validates proposal boundaries, slices transient Block text, and encrypts each Mention before persistence.
+- Detection-created Mentions begin `UNREVIEWED` and unassigned to Entity or ProtectedValue records.
+- Overlapping V1 rule proposals are resolved deterministically with the earliest, longest proposal winning.
+- Mention offsets use JavaScript UTF-16 code units, matching `RegExp` match indexes and `String.slice`. Any future Python NER adapter must convert Unicode code-point offsets at the application boundary before producing proposals.
+- V1 discards lower-priority overlapping rule proposals. Before mixed rule/NER evaluation is introduced, the proposal contract should retain rejected overlap evidence so detector recall remains measurable.
 
 ## Entity
 
@@ -412,6 +431,12 @@ interface ProcessingJob {
 ```
 
 OCR/page processing should be resumable via job checkpoints and persisted page results.
+
+V1 privacy detection persists a `DETECT` job before reading Blocks. Progress
+checkpoints contain only block counts (for example `2/5`), never IDs or plaintext.
+Completing the job, inserting all Mentions, and setting the Document to `DETECTED`
+happen in one transaction. On failure no proposed Mention is committed; the job and
+Document are finalized as `FAILED`, with a code-only encrypted error payload.
 
 ## Critical Examples
 

@@ -105,3 +105,4 @@ export class EntityService {
 }
 
 export * from './document-processing'
+export * from './privacy-detection'

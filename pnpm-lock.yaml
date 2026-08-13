@@ -86,6 +86,9 @@ importers:
       '@aliasai/domain':
         specifier: workspace:*
         version: link:../domain
+      '@aliasai/privacy-detection':
+        specifier: workspace:*
+        version: link:../privacy-detection
       '@aliasai/python-bridge':
         specifier: workspace:*
         version: link:../python-bridge

@@ -8,6 +8,7 @@ import type {
   EntityRelationship,
   Mention,
   NormalizedBBox,
+  ProcessingJob,
   ProtectedValue
 } from './types'
 
@@ -113,8 +114,67 @@ export function assertMention(mention: Mention): void {
     throw new DomainInvariantError('mention.endOffset must be greater than mention.startOffset')
   }
   requireUnitInterval(mention.confidence, 'mention.confidence')
+  if (!MENTION_TYPES.has(mention.type)) throw new DomainInvariantError('mention.type is not supported')
+  if (!MENTION_STRENGTHS.has(mention.strength)) throw new DomainInvariantError('mention.strength is not supported')
+  if (!MENTION_DETECTORS.has(mention.detector)) throw new DomainInvariantError('mention.detector is not supported')
+  if (!MENTION_REVIEW_STATUSES.has(mention.reviewStatus)) {
+    throw new DomainInvariantError('mention.reviewStatus is not supported')
+  }
   if (mention.bbox !== undefined) assertNormalizedBBox(mention.bbox)
 }
+
+const MENTION_TYPES = new Set([
+  'PERSON',
+  'ORGANIZATION',
+  'PHONE',
+  'EMAIL',
+  'ID_CARD',
+  'BANK_ACCOUNT',
+  'ADDRESS',
+  'CASE_NUMBER',
+  'CONTRACT_NUMBER',
+  'COURT',
+  'LAWYER',
+  'JUDGE'
+])
+const MENTION_STRENGTHS = new Set(['EXPLICIT', 'PARTIAL', 'REFERENCE'])
+const MENTION_DETECTORS = new Set(['REGEX', 'NER', 'DICTIONARY', 'USER', 'FUSION'])
+const MENTION_REVIEW_STATUSES = new Set(['UNREVIEWED', 'CONFIRMED', 'REJECTED'])
+
+export function assertProcessingJob(job: ProcessingJob): void {
+  requireIdentifier(job.id, 'processingJob.id')
+  requireIdentifier(job.documentId, 'processingJob.documentId')
+  requireUnitInterval(job.progress, 'processingJob.progress')
+  if (!PROCESSING_JOB_TYPES.has(job.type)) throw new DomainInvariantError('processingJob.type is not supported')
+  if (!PROCESSING_JOB_STATUSES.has(job.status)) throw new DomainInvariantError('processingJob.status is not supported')
+  requireNonNegativeInteger(job.createdAt, 'processingJob.createdAt')
+  if (job.startedAt !== undefined) requireNonNegativeInteger(job.startedAt, 'processingJob.startedAt')
+  if (job.finishedAt !== undefined) requireNonNegativeInteger(job.finishedAt, 'processingJob.finishedAt')
+  if (job.startedAt !== undefined && job.startedAt < job.createdAt) {
+    throw new DomainInvariantError('processingJob.startedAt must not precede processingJob.createdAt')
+  }
+  if (job.finishedAt !== undefined && (job.startedAt === undefined || job.finishedAt < job.startedAt)) {
+    throw new DomainInvariantError('processingJob.finishedAt requires and must not precede startedAt')
+  }
+  if (job.status === 'PENDING' && (job.startedAt !== undefined || job.finishedAt !== undefined || job.progress !== 0)) {
+    throw new DomainInvariantError('pending ProcessingJob must not have started or finished')
+  }
+  if (job.status === 'RUNNING' && (job.startedAt === undefined || job.finishedAt !== undefined)) {
+    throw new DomainInvariantError('running ProcessingJob requires startedAt and no finishedAt')
+  }
+  if (
+    (job.status === 'COMPLETED' || job.status === 'FAILED' || job.status === 'CANCELLED') &&
+    (job.startedAt === undefined || job.finishedAt === undefined)
+  ) {
+    throw new DomainInvariantError('terminal ProcessingJob requires startedAt and finishedAt')
+  }
+  if (job.status === 'COMPLETED' && job.progress !== 1) {
+    throw new DomainInvariantError('completed ProcessingJob must have progress 1')
+  }
+}
+
+const PROCESSING_JOB_TYPES = new Set(['PARSE', 'OCR', 'DETECT', 'RESOLVE', 'SANITIZE', 'VERIFY'])
+const PROCESSING_JOB_STATUSES = new Set(['PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'])
 
 export function assertEntity(entity: Entity): void {
   requireIdentifier(entity.id, 'entity.id')

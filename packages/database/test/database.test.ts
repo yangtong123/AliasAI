@@ -600,7 +600,8 @@ describe('SQLite schema and repositories', () => {
           jobType: 'PARSE',
           status: 'RUNNING',
           progress: 1.1,
-          createdAt: 1
+          createdAt: 1,
+          startedAt: 1
         })
         .run()
     ).toThrow(/CHECK constraint failed/)

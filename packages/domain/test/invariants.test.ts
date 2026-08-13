@@ -4,6 +4,7 @@ import {
   assertDocumentBlock,
   assertEntity,
   assertMention,
+  assertProcessingJob,
   assertPublicTokenUnchanged,
   assignMentionToEntity,
   canonicalizeEntityConstraint,
@@ -86,6 +87,49 @@ describe('domain invariants', () => {
     expect(() => assertMention({ ...mention, startOffset: 2, endOffset: 2 })).toThrow(
       'mention.endOffset must be greater than mention.startOffset'
     )
+  })
+
+  it('rejects unsupported Mention classifier values at runtime', () => {
+    expect(() => assertMention({ ...mention, detector: 'REMOTE_MODEL' as Mention['detector'] })).toThrow(
+      'mention.detector is not supported'
+    )
+  })
+
+  it('enforces ProcessingJob lifecycle timestamps and completion progress', () => {
+    expect(() =>
+      assertProcessingJob({
+        id: 'job-1',
+        documentId: 'document-1',
+        type: 'DETECT',
+        status: 'RUNNING',
+        progress: 0.5,
+        createdAt: 1,
+        startedAt: 1
+      })
+    ).not.toThrow()
+    expect(() =>
+      assertProcessingJob({
+        id: 'job-1',
+        documentId: 'document-1',
+        type: 'DETECT',
+        status: 'COMPLETED',
+        progress: 0.5,
+        createdAt: 1,
+        startedAt: 1,
+        finishedAt: 2
+      })
+    ).toThrow('completed ProcessingJob must have progress 1')
+    expect(() =>
+      assertProcessingJob({
+        id: 'job-1',
+        documentId: 'document-1',
+        type: 'REMOTE' as 'DETECT',
+        status: 'RUNNING',
+        progress: 0,
+        createdAt: 1,
+        startedAt: 1
+      })
+    ).toThrow('processingJob.type is not supported')
   })
 
   it('assigns a Mention only to an active Entity in the same Matter', () => {

@@ -424,7 +424,49 @@ export const processingJobs = sqliteTable(
   (table) => [
     index('idx_processing_jobs_document').on(table.documentId),
     index('idx_processing_jobs_status').on(table.status),
-    check('processing_jobs_progress_range', sql`${table.progress} >= 0 AND ${table.progress} <= 1`)
+    check('processing_jobs_progress_range', sql`${table.progress} >= 0 AND ${table.progress} <= 1`),
+    check(
+      'processing_jobs_type_allowed',
+      sql`${table.jobType} IN ('PARSE', 'OCR', 'DETECT', 'RESOLVE', 'SANITIZE', 'VERIFY')`
+    ),
+    check(
+      'processing_jobs_status_allowed',
+      sql`${table.status} IN ('PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED')`
+    ),
+    check(
+      'processing_jobs_timestamps_ordered',
+      sql`${table.startedAt} IS NULL OR (${table.startedAt} >= ${table.createdAt} AND (${table.finishedAt} IS NULL OR ${table.finishedAt} >= ${table.startedAt}))`
+    ),
+    check(
+      'processing_jobs_lifecycle_consistent',
+      sql`(
+        ${table.status} = 'PENDING'
+        AND ${table.progress} = 0
+        AND ${table.startedAt} IS NULL
+        AND ${table.finishedAt} IS NULL
+        AND ${table.errorCipher} IS NULL
+      ) OR (
+        ${table.status} = 'RUNNING'
+        AND ${table.startedAt} IS NOT NULL
+        AND ${table.finishedAt} IS NULL
+        AND ${table.errorCipher} IS NULL
+      ) OR (
+        ${table.status} = 'COMPLETED'
+        AND ${table.progress} = 1
+        AND ${table.startedAt} IS NOT NULL
+        AND ${table.finishedAt} IS NOT NULL
+        AND ${table.errorCipher} IS NULL
+      ) OR (
+        ${table.status} = 'FAILED'
+        AND ${table.startedAt} IS NOT NULL
+        AND ${table.finishedAt} IS NOT NULL
+        AND ${table.errorCipher} IS NOT NULL
+      ) OR (
+        ${table.status} = 'CANCELLED'
+        AND ${table.startedAt} IS NOT NULL
+        AND ${table.finishedAt} IS NOT NULL
+      )`
+    )
   ]
 )
 
