@@ -96,6 +96,18 @@ export function fingerprintNormalizedValue(matterSearchKey: Buffer, normalizedVa
   return createHmac('sha256', matterSearchKey).update(normalizedValue, 'utf8').digest()
 }
 
+/**
+ * Derives the Matter-local HMAC search key from the application search key.
+ * The derived key is never persisted and must not be reused as a persistence key.
+ */
+export function deriveMatterSearchKey(searchKey: Buffer, matterId: string): Buffer {
+  assertKey(searchKey)
+  if (matterId.length === 0) {
+    throw new CryptoInvariantError('Matter identifier must be non-empty')
+  }
+  return createHmac('sha256', searchKey).update(`matter-search:${matterId}`, 'utf8').digest()
+}
+
 export function constantTimeEqual(left: Buffer, right: Buffer): boolean {
   return left.length === right.length && timingSafeEqual(left, right)
 }

@@ -3,6 +3,7 @@ import {
   constantTimeEqual,
   CryptoInvariantError,
   decrypt,
+  deriveMatterSearchKey,
   encrypt,
   fingerprintNormalizedValue,
   generateKey,
@@ -43,6 +44,23 @@ describe('V1 crypto primitives', () => {
     expect(matterOne).toHaveLength(32)
     expect(constantTimeEqual(matterOne, matterTwo)).toBe(false)
     expect(constantTimeEqual(matterOne, fingerprintNormalizedValue(Buffer.alloc(32, 1), value))).toBe(true)
+  })
+
+  it('derives a deterministic 256-bit Matter-local search key', () => {
+    const searchKey = Buffer.alloc(32, 1)
+    const matterOne = deriveMatterSearchKey(searchKey, 'matter-1')
+    const matterTwo = deriveMatterSearchKey(searchKey, 'matter-2')
+    const otherSearchKey = deriveMatterSearchKey(Buffer.alloc(32, 2), 'matter-1')
+
+    expect(matterOne).toHaveLength(32)
+    expect(constantTimeEqual(matterOne, deriveMatterSearchKey(searchKey, 'matter-1'))).toBe(true)
+    expect(constantTimeEqual(matterOne, matterTwo)).toBe(false)
+    expect(constantTimeEqual(matterOne, otherSearchKey)).toBe(false)
+  })
+
+  it('rejects invalid inputs when deriving the Matter-local search key', () => {
+    expect(() => deriveMatterSearchKey(Buffer.alloc(31), 'matter-1')).toThrow(CryptoInvariantError)
+    expect(() => deriveMatterSearchKey(Buffer.alloc(32, 1), '')).toThrow(CryptoInvariantError)
   })
 
   it('requires 256-bit keys', () => {
