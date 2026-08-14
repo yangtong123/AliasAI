@@ -2,10 +2,16 @@ import { encrypt, generatePublicToken, generateUuidV7 } from '@aliasai/crypto'
 import type { Entity, EntityAlias, EntityType, Matter, Document } from '@aliasai/domain'
 import type { EntityRepository, MatterRepository, DocumentRepository } from '@aliasai/database'
 import { inspectDocumentSource } from '@aliasai/document'
+import { resolutionEventContext } from './entity-resolution'
 
 export interface ApplicationKeys {
   /** Local-only AES-256-GCM key. Never expose this value through renderer IPC. */
   readonly persistenceKey: Buffer
+  /**
+   * Local-only HMAC search key for ProtectedValue fingerprints. It must differ
+   * from persistenceKey and must never be exposed through renderer IPC.
+   */
+  readonly searchKey?: Buffer
 }
 
 export class MatterService {
@@ -90,13 +96,14 @@ export class EntityService {
       isPrimary: true,
       createdAt: timestamp
     }
+    const eventId = generateUuidV7(timestamp + 2)
     const event = {
-      id: generateUuidV7(timestamp + 2),
+      id: eventId,
       matterId,
       type: 'ENTITY_CREATED' as const,
       entityId: entity.id,
       actor: 'USER' as const,
-      payloadCipher: encrypt(Buffer.from('{}'), this.keys.persistenceKey, Buffer.from(`${entity.id}:resolution-event`)),
+      payloadCipher: encrypt(Buffer.from('{}'), this.keys.persistenceKey, resolutionEventContext(eventId)),
       createdAt: timestamp
     }
     const created = this.entities.createWithPrimaryAliasAndEvent({ entity, primaryAlias: alias, event })
@@ -106,3 +113,4 @@ export class EntityService {
 
 export * from './document-processing'
 export * from './privacy-detection'
+export * from './entity-resolution'

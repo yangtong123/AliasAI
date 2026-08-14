@@ -9,6 +9,7 @@
     "@aliasai/database": "workspace:*",
     "@aliasai/document": "workspace:*",
     "@aliasai/domain": "workspace:*",
+    "@aliasai/entity-resolution": "workspace:*",
     "@aliasai/privacy-detection": "workspace:*",
     "@aliasai/python-bridge": "workspace:*"
   }

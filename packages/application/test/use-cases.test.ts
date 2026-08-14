@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { decrypt } from '@aliasai/crypto'
 import { DocumentRepository, EntityRepository, MatterRepository, migrateDatabase, openDatabase } from '@aliasai/database'
-import { DocumentImportService, EntityService, MatterService } from '../src/index'
+import { DocumentImportService, EntityService, MatterService, resolutionEventContext } from '../src/index'
 import type { AliasAiDatabase, SqliteClient } from '@aliasai/database'
 
 describe('application use cases', () => {
@@ -71,14 +71,14 @@ describe('application use cases', () => {
       'Plaintiff A'
     )
     const event = sqlite
-      .prepare('SELECT event_type, payload_cipher FROM resolution_events WHERE entity_id = ?')
-      .get(created.entity.id) as { event_type: string; payload_cipher: Buffer }
+      .prepare('SELECT id, event_type, payload_cipher FROM resolution_events WHERE entity_id = ?')
+      .get(created.entity.id) as { id: string; event_type: string; payload_cipher: Buffer }
 
     expect(created.entity).toMatchObject({ matterId: matter.id, type: 'PERSON', status: 'ACTIVE' })
     expect(created.entity.publicToken).toMatch(/^@P-[0-9A-F]{16}$/)
     expect(created.alias).toMatchObject({ entityId: created.entity.id, isPrimary: true, alias: 'Plaintiff A' })
     expect(event.event_type).toBe('ENTITY_CREATED')
-    expect(decrypt(event.payload_cipher, key, Buffer.from(`${created.entity.id}:resolution-event`)).toString()).toBe('{}')
+    expect(decrypt(event.payload_cipher, key, resolutionEventContext(event.id)).toString()).toBe('{}')
   })
 
   it('rolls back Entity creation when its primary alias conflicts', () => {
