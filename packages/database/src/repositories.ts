@@ -1,14 +1,20 @@
-import { and, asc, desc, eq, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm'
 import type {
   Document,
   DocumentBlock,
   DocumentPage,
   Entity,
   EntityAlias,
+  EntityConstraint,
+  EntityType,
   Matter,
   Mention,
   ProcessingJob,
-  ResolutionEvent
+  ProtectedValue,
+  ProtectedValueType,
+  ResolutionCandidate,
+  ResolutionEvent,
+  ResolutionEvidence
 } from '@aliasai/domain'
 import {
   assertDocument,
@@ -18,7 +24,10 @@ import {
   assertEntityAlias,
   assertMention,
   assertProcessingJob,
-  assertSameMatter
+  assertProtectedValue,
+  assertSameMatter,
+  assignMentionToEntity,
+  canonicalizeEntityConstraint
 } from '@aliasai/domain'
 import type { AliasAiDatabase } from './client'
 import {
@@ -27,10 +36,15 @@ import {
   documents,
   entities,
   entityAliases,
+  entityConstraints,
+  entityProtectedValues,
   matters,
   mentions,
   processingJobs,
-  resolutionEvents
+  protectedValues,
+  resolutionCandidates,
+  resolutionEvents,
+  resolutionEvidence
 } from './schema'
 
 export interface CreateMatterInput {
@@ -592,6 +606,10 @@ type DocumentRow = typeof documents.$inferSelect
 type DocumentBlockRow = typeof documentBlocks.$inferSelect
 type MentionRow = typeof mentions.$inferSelect
 type ProcessingJobRow = typeof processingJobs.$inferSelect
+type EntityRow = typeof entities.$inferSelect
+type EntityAliasRow = typeof entityAliases.$inferSelect
+type EntityConstraintRow = typeof entityConstraints.$inferSelect
+type ProtectedValueRow = typeof protectedValues.$inferSelect
 
 function toDocument(row: DocumentRow): Document {
   return {
@@ -709,6 +727,94 @@ function mentionInputToDomain(input: CreateMentionInput): Mention {
   }
 }
 
+function toEntity(row: EntityRow): Entity {
+  const entity: Entity = {
+    id: row.id,
+    matterId: row.matterId,
+    type: row.entityType,
+    publicToken: row.publicToken,
+    status: row.status,
+    ...(row.mergedIntoEntityId === null ? {} : { mergedIntoEntityId: row.mergedIntoEntityId }),
+    ...(row.resolutionConfidence === null ? {} : { resolutionConfidence: row.resolutionConfidence }),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
+  }
+  assertEntity(entity)
+  return entity
+}
+
+function toEntityAlias(row: EntityAliasRow): EntityAlias {
+  const alias: EntityAlias = {
+    id: row.id,
+    matterId: row.matterId,
+    entityId: row.entityId,
+    alias: row.alias,
+    aliasType: row.aliasType,
+    ...(row.role === null ? {} : { role: row.role }),
+    isPrimary: row.isPrimary,
+    createdAt: row.createdAt
+  }
+  assertEntityAlias(alias)
+  return alias
+}
+
+function toEntityConstraint(row: EntityConstraintRow): EntityConstraint {
+  return {
+    id: row.id,
+    matterId: row.matterId,
+    entityAId: row.entityAId,
+    entityBId: row.entityBId,
+    type: row.constraintType,
+    reason: row.reason,
+    source: row.source,
+    createdAt: row.createdAt
+  }
+}
+
+function toProtectedValueInsert(input: CreateProtectedValueInput): typeof protectedValues.$inferInsert {
+  return {
+    id: input.id,
+    matterId: input.matterId,
+    valueType: input.type,
+    valueCipher: input.valueCipher,
+    fingerprint: input.fingerprint,
+    ...(input.publicToken === undefined ? {} : { publicToken: input.publicToken }),
+    restorePolicy: input.restorePolicy,
+    createdAt: input.createdAt
+  }
+}
+
+function toProtectedValueWithCipher(row: ProtectedValueRow): ProtectedValueWithCipher {
+  const value: ProtectedValueWithCipher = {
+    id: row.id,
+    matterId: row.matterId,
+    type: row.valueType,
+    valueCipher: row.valueCipher,
+    ...(row.publicToken === null ? {} : { publicToken: row.publicToken }),
+    restorePolicy: row.restorePolicy,
+    createdAt: row.createdAt
+  }
+  assertProtectedValue(value)
+  return value
+}
+
+function toResolutionEventInsert(event: CreateResolutionEventInput): typeof resolutionEvents.$inferInsert {
+  return {
+    id: event.id,
+    matterId: event.matterId,
+    eventType: event.type,
+    ...(event.entityId === undefined ? {} : { entityId: event.entityId }),
+    ...(event.mentionId === undefined ? {} : { mentionId: event.mentionId }),
+    actor: event.actor,
+    payloadCipher: event.payloadCipher,
+    createdAt: event.createdAt
+  }
+}
+
+function toResolutionMentionSource(row: MentionRow): ResolutionMentionSource {
+  return { ...toMention(row), textCipher: row.textCipher, fingerprint: row.fingerprint }
+}
+
 export class EntityRepository {
   constructor(private readonly db: AliasAiDatabase) {}
 
@@ -741,20 +847,11 @@ export class EntityRepository {
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt
     }
-    const eventRow = {
-      id: event.id,
-      matterId: event.matterId,
-      eventType: event.type,
-      entityId: event.entityId,
-      actor: event.actor,
-      payloadCipher: event.payloadCipher,
-      createdAt: event.createdAt
-    }
 
     return this.db.transaction((transaction) => {
       transaction.insert(entities).values(entityRow).run()
       transaction.insert(entityAliases).values(primaryAlias).run()
-      transaction.insert(resolutionEvents).values(eventRow).run()
+      transaction.insert(resolutionEvents).values(toResolutionEventInsert(event)).run()
       return {
         entity,
         primaryAlias,
@@ -793,16 +890,7 @@ export class EntityRepository {
   }
 
   appendResolutionEvent(event: CreateResolutionEventInput): ResolutionEvent {
-    this.db.insert(resolutionEvents).values({
-      id: event.id,
-      matterId: event.matterId,
-      eventType: event.type,
-      ...(event.entityId === undefined ? {} : { entityId: event.entityId }),
-      ...(event.mentionId === undefined ? {} : { mentionId: event.mentionId }),
-      actor: event.actor,
-      payloadCipher: event.payloadCipher,
-      createdAt: event.createdAt
-    }).run()
+    this.db.insert(resolutionEvents).values(toResolutionEventInsert(event)).run()
     return {
       id: event.id,
       matterId: event.matterId,
@@ -814,23 +902,867 @@ export class EntityRepository {
     }
   }
 
+  findById(id: string): Entity | undefined {
+    const row = this.db.select().from(entities).where(eq(entities.id, id)).get()
+    return row === undefined ? undefined : toEntity(row)
+  }
+
+  findByMatterAndType(matterId: string, type: EntityType): readonly Entity[] {
+    return this.db
+      .select()
+      .from(entities)
+      .where(and(eq(entities.matterId, matterId), eq(entities.entityType, type), eq(entities.status, 'ACTIVE')))
+      .orderBy(asc(entities.createdAt), asc(entities.id))
+      .all()
+      .map(toEntity)
+  }
+
+  findAliases(matterId: string): readonly EntityAlias[] {
+    return this.db
+      .select()
+      .from(entityAliases)
+      .where(eq(entityAliases.matterId, matterId))
+      .orderBy(asc(entityAliases.createdAt), asc(entityAliases.id))
+      .all()
+      .map(toEntityAlias)
+  }
+
   findByPublicToken(matterId: string, publicToken: string): Entity | undefined {
     const row = this.db
       .select()
       .from(entities)
       .where(and(eq(entities.matterId, matterId), eq(entities.publicToken, publicToken)))
       .get()
-    if (row === undefined) return undefined
+    return row === undefined ? undefined : toEntity(row)
+  }
+}
+
+export interface ProtectedValueWithCipher extends ProtectedValue {
+  readonly valueCipher: Buffer
+}
+
+export interface CreateProtectedValueInput extends ProtectedValueWithCipher {
+  readonly fingerprint: Buffer
+}
+
+export interface LinkEntityProtectedValueInput {
+  /** Caller-side correlation id; persistence identity is the (entityId, protectedValueId) pair. */
+  readonly id: string
+  readonly matterId: string
+  readonly entityId: string
+  readonly protectedValueId: string
+  readonly relationshipType: string
+  readonly confidence: number
+  readonly isPrimary: boolean
+  readonly createdAt: number
+}
+
+export interface EntityProtectedValueSummary {
+  readonly protectedValueId: string
+  readonly type: ProtectedValueType
+  readonly fingerprint: Buffer
+}
+
+/** Owns ProtectedValue persistence and Entity <-> ProtectedValue links. */
+export class ProtectedValueRepository {
+  constructor(private readonly db: AliasAiDatabase) {}
+
+  findByFingerprint(
+    matterId: string,
+    type: ProtectedValueType,
+    fingerprint: Buffer
+  ): ProtectedValueWithCipher | undefined {
+    const row = this.db
+      .select()
+      .from(protectedValues)
+      .where(
+        and(
+          eq(protectedValues.matterId, matterId),
+          eq(protectedValues.valueType, type),
+          eq(protectedValues.fingerprint, fingerprint)
+        )
+      )
+      .get()
+    return row === undefined ? undefined : toProtectedValueWithCipher(row)
+  }
+
+  create(input: CreateProtectedValueInput): ProtectedValue {
+    assertProtectedValue(input)
+    if (input.valueCipher.length === 0) throw new Error('valueCipher must not be empty')
+    if (input.fingerprint.length === 0) throw new Error('fingerprint must not be empty')
+    this.db.insert(protectedValues).values(toProtectedValueInsert(input)).run()
     return {
-      id: row.id,
-      matterId: row.matterId,
-      type: row.entityType,
-      publicToken: row.publicToken,
-      status: row.status,
-      ...(row.mergedIntoEntityId === null ? {} : { mergedIntoEntityId: row.mergedIntoEntityId }),
-      ...(row.resolutionConfidence === null ? {} : { resolutionConfidence: row.resolutionConfidence }),
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt
+      id: input.id,
+      matterId: input.matterId,
+      type: input.type,
+      ...(input.publicToken === undefined ? {} : { publicToken: input.publicToken }),
+      restorePolicy: input.restorePolicy,
+      createdAt: input.createdAt
     }
+  }
+
+  linkToEntity(input: LinkEntityProtectedValueInput): void {
+    const entityRow = this.db
+      .select({ matterId: entities.matterId })
+      .from(entities)
+      .where(eq(entities.id, input.entityId))
+      .get()
+    if (entityRow === undefined || entityRow.matterId !== input.matterId) {
+      throw new Error('Entity was not found in the Matter')
+    }
+    const valueRow = this.db
+      .select({ matterId: protectedValues.matterId })
+      .from(protectedValues)
+      .where(eq(protectedValues.id, input.protectedValueId))
+      .get()
+    if (valueRow === undefined || valueRow.matterId !== input.matterId) {
+      throw new Error('ProtectedValue was not found in the Matter')
+    }
+    this.db
+      .insert(entityProtectedValues)
+      .values({
+        entityId: input.entityId,
+        protectedValueId: input.protectedValueId,
+        relationshipType: input.relationshipType,
+        confidence: input.confidence,
+        isPrimary: input.isPrimary,
+        createdAt: input.createdAt
+      })
+      .run()
+  }
+
+  findEntitiesByProtectedValue(matterId: string, protectedValueId: string): readonly Entity[] {
+    return this.db
+      .select({ entity: entities })
+      .from(entityProtectedValues)
+      .innerJoin(entities, eq(entities.id, entityProtectedValues.entityId))
+      .where(
+        and(
+          eq(entities.matterId, matterId),
+          eq(entityProtectedValues.protectedValueId, protectedValueId),
+          eq(entities.status, 'ACTIVE')
+        )
+      )
+      .orderBy(asc(entities.createdAt), asc(entities.id))
+      .all()
+      .map(({ entity }) => toEntity(entity))
+  }
+
+  findEntityProtectedValues(matterId: string, entityId: string): readonly EntityProtectedValueSummary[] {
+    return this.db
+      .select({
+        protectedValueId: entityProtectedValues.protectedValueId,
+        type: protectedValues.valueType,
+        fingerprint: protectedValues.fingerprint
+      })
+      .from(entityProtectedValues)
+      .innerJoin(protectedValues, eq(protectedValues.id, entityProtectedValues.protectedValueId))
+      .where(and(eq(protectedValues.matterId, matterId), eq(entityProtectedValues.entityId, entityId)))
+      .orderBy(asc(protectedValues.createdAt), asc(protectedValues.id))
+      .all()
+  }
+}
+
+export interface ResolutionMentionSource extends Mention {
+  readonly textCipher: Buffer
+  readonly fingerprint: Buffer | null
+}
+
+export interface BeginEntityResolutionInput {
+  readonly documentId: string
+  readonly jobId: string
+  readonly startedAt: number
+}
+
+export interface BegunEntityResolution {
+  readonly document: Document
+  readonly job: ProcessingJob
+  readonly mentions: readonly ResolutionMentionSource[]
+}
+
+export interface ResolutionMentionUpdate {
+  readonly id: string
+  readonly fingerprint: Buffer | null
+  readonly protectedValueId: string | null
+  readonly entityId: string | null
+}
+
+export type CreateResolutionEvidenceInput = Omit<ResolutionEvidence, 'candidateId'>
+
+export interface CreateResolutionCandidateInput extends ResolutionCandidate {
+  readonly evidence: readonly CreateResolutionEvidenceInput[]
+}
+
+export interface CompleteEntityResolutionInput {
+  readonly documentId: string
+  readonly jobId: string
+  /** New Entities (with primary alias and ENTITY_CREATED event) inserted in the same transaction. */
+  readonly entitiesToCreate?: readonly CreateEntityWithPrimaryAliasAndEventInput[]
+  readonly protectedValues: readonly CreateProtectedValueInput[]
+  readonly entityProtectedValueLinks: readonly LinkEntityProtectedValueInput[]
+  readonly mentionUpdates: readonly ResolutionMentionUpdate[]
+  readonly candidates: readonly CreateResolutionCandidateInput[]
+  readonly events: readonly CreateResolutionEventInput[]
+  readonly finishedAt: number
+}
+
+export interface EntityResolutionResult {
+  readonly document: Document
+  readonly job: ProcessingJob
+}
+
+export interface AssignMentionInput {
+  readonly mentionId: string
+  readonly entityId: string
+  /** Timestamp applied when open review candidates are closed by the assignment. */
+  readonly resolvedAt: number
+  readonly event: CreateResolutionEventInput
+  readonly updatedAt?: never
+}
+
+export interface AddEntityConstraintInput {
+  readonly constraint: EntityConstraint
+  readonly event: CreateResolutionEventInput
+}
+
+/** Owns the RESOLVE job state machine and all entity resolution persistence transactions. */
+export class EntityResolutionRepository {
+  constructor(private readonly db: AliasAiDatabase) {}
+
+  findCompleted(documentId: string): EntityResolutionResult | undefined {
+    const documentRow = this.db.select().from(documents).where(eq(documents.id, documentId)).get()
+    if (documentRow === undefined || documentRow.parseStatus !== 'READY') return undefined
+    const jobRow = this.db
+      .select()
+      .from(processingJobs)
+      .where(
+        and(
+          eq(processingJobs.documentId, documentId),
+          eq(processingJobs.jobType, 'RESOLVE'),
+          eq(processingJobs.status, 'COMPLETED')
+        )
+      )
+      .orderBy(desc(processingJobs.finishedAt), desc(processingJobs.createdAt))
+      .limit(1)
+      .get()
+    if (jobRow === undefined) throw new Error('Ready Document is missing its completed ProcessingJob')
+    return { document: toDocument(documentRow), job: toProcessingJob(jobRow) }
+  }
+
+  begin(input: BeginEntityResolutionInput): BegunEntityResolution {
+    if (input.jobId.trim().length === 0) throw new Error('jobId must not be empty')
+    return this.db.transaction((transaction) => {
+      const current = transaction.select().from(documents).where(eq(documents.id, input.documentId)).get()
+      if (current === undefined) throw new Error('Document was not found')
+      if (input.startedAt < current.updatedAt) throw new Error('Entity resolution timestamp must not move backwards')
+      if (current.parseStatus !== 'DETECTED' && current.parseStatus !== 'FAILED') {
+        throw new Error('Document is not available for entity resolution')
+      }
+      if (current.pageCount === null) throw new Error('Document Model is incomplete')
+
+      if (current.parseStatus === 'FAILED') {
+        const latest = transaction
+          .select()
+          .from(processingJobs)
+          .where(and(eq(processingJobs.documentId, input.documentId), eq(processingJobs.jobType, 'RESOLVE')))
+          .orderBy(desc(processingJobs.createdAt))
+          .limit(1)
+          .get()
+        if (latest?.status !== 'FAILED') throw new Error('Failed Document did not fail during entity resolution')
+      }
+
+      const pageCount = transaction
+        .select({ id: documentPages.id })
+        .from(documentPages)
+        .where(eq(documentPages.documentId, input.documentId))
+        .all().length
+      if (pageCount !== current.pageCount) throw new Error('Document Model is incomplete')
+
+      const job: ProcessingJob = {
+        id: input.jobId,
+        documentId: input.documentId,
+        type: 'RESOLVE',
+        status: 'RUNNING',
+        progress: 0,
+        createdAt: input.startedAt,
+        startedAt: input.startedAt
+      }
+      assertProcessingJob(job)
+      transaction
+        .insert(processingJobs)
+        .values({
+          id: job.id,
+          documentId: job.documentId,
+          jobType: job.type,
+          status: job.status,
+          progress: job.progress,
+          createdAt: job.createdAt,
+          startedAt: job.startedAt
+        })
+        .run()
+      const transition = transaction
+        .update(documents)
+        .set({ parseStatus: 'RESOLVING', updatedAt: input.startedAt })
+        .where(and(eq(documents.id, input.documentId), eq(documents.parseStatus, current.parseStatus)))
+        .run()
+      if (transition.changes !== 1) throw new Error('Document state changed before entity resolution began')
+
+      const mentionRows = transaction
+        .select({ mention: mentions })
+        .from(mentions)
+        .innerJoin(documentPages, eq(documentPages.id, mentions.pageId))
+        .innerJoin(documentBlocks, eq(documentBlocks.id, mentions.blockId))
+        .where(eq(mentions.documentId, input.documentId))
+        .orderBy(
+          asc(documentPages.pageNo),
+          asc(documentBlocks.readingOrder),
+          asc(mentions.startOffset),
+          asc(mentions.id)
+        )
+        .all()
+      const document = toDocument({ ...current, parseStatus: 'RESOLVING', updatedAt: input.startedAt })
+      return {
+        document,
+        job,
+        mentions: mentionRows.map(({ mention }) => toResolutionMentionSource(mention))
+      }
+    })
+  }
+
+  updateProgress(jobId: string, completedMentions: number, totalMentions: number): ProcessingJob {
+    if (!Number.isSafeInteger(completedMentions) || completedMentions < 0) {
+      throw new Error('completedMentions must be non-negative')
+    }
+    if (!Number.isSafeInteger(totalMentions) || totalMentions < 1 || completedMentions > totalMentions) {
+      throw new Error('totalMentions must be positive and no smaller than completedMentions')
+    }
+    const progress = completedMentions / totalMentions
+    const result = this.db
+      .update(processingJobs)
+      .set({ progress, checkpoint: `${completedMentions}/${totalMentions}` })
+      .where(and(eq(processingJobs.id, jobId), eq(processingJobs.jobType, 'RESOLVE'), eq(processingJobs.status, 'RUNNING')))
+      .run()
+    if (result.changes !== 1) throw new Error('Entity resolution job is not running')
+    return this.requireJob(jobId)
+  }
+
+  complete(input: CompleteEntityResolutionInput): EntityResolutionResult {
+    for (const value of input.protectedValues) {
+      assertProtectedValue(value)
+      if (value.valueCipher.length === 0) throw new Error('valueCipher must not be empty')
+      if (value.fingerprint.length === 0) throw new Error('fingerprint must not be empty')
+    }
+    const updateIds = new Set<string>()
+    for (const update of input.mentionUpdates) {
+      if (updateIds.has(update.id)) throw new Error('Mention update IDs must be unique')
+      updateIds.add(update.id)
+    }
+    const candidateIds = new Set<string>()
+    for (const candidate of input.candidates) {
+      if (candidate.algorithmVersion.trim().length === 0) throw new Error('algorithmVersion must not be empty')
+      if (candidateIds.has(candidate.id)) throw new Error('ResolutionCandidate IDs must be unique')
+      candidateIds.add(candidate.id)
+    }
+    const entityIds = new Set<string>()
+    for (const created of input.entitiesToCreate ?? []) {
+      assertEntity(created.entity)
+      assertEntityAlias(created.primaryAlias)
+      assertSameMatter(created.entity, created.primaryAlias, 'entity and primary alias')
+      if (created.entity.status !== 'ACTIVE') throw new Error('a newly created Entity must be active')
+      if (
+        created.primaryAlias.entityId !== created.entity.id ||
+        created.primaryAlias.aliasType !== 'PRIMARY' ||
+        !created.primaryAlias.isPrimary
+      ) {
+        throw new Error('primary alias must identify the newly created Entity')
+      }
+      if (
+        created.event.type !== 'ENTITY_CREATED' ||
+        created.event.entityId !== created.entity.id ||
+        created.event.mentionId !== undefined
+      ) {
+        throw new Error('creation event must identify only the newly created Entity')
+      }
+      if (created.event.matterId !== created.entity.matterId) {
+        throw new Error('creation event must belong to the Entity Matter')
+      }
+      if (entityIds.has(created.entity.id)) throw new Error('Entity IDs must be unique')
+      entityIds.add(created.entity.id)
+    }
+
+    return this.db.transaction((transaction) => {
+      const documentRow = transaction.select().from(documents).where(eq(documents.id, input.documentId)).get()
+      const jobRow = transaction.select().from(processingJobs).where(eq(processingJobs.id, input.jobId)).get()
+      if (documentRow === undefined || documentRow.parseStatus !== 'RESOLVING') {
+        throw new Error('Document is not currently resolving entities')
+      }
+      if (
+        jobRow === undefined ||
+        jobRow.documentId !== input.documentId ||
+        jobRow.jobType !== 'RESOLVE' ||
+        jobRow.status !== 'RUNNING' ||
+        jobRow.startedAt === null
+      ) {
+        throw new Error('Entity resolution job is not running')
+      }
+      if (input.finishedAt < documentRow.updatedAt || input.finishedAt < jobRow.startedAt) {
+        throw new Error('Entity resolution timestamp must not move backwards')
+      }
+
+      // Verify Mention ownership before any write so a foreign reference aborts
+      // cleanly, and derive the assignment transition from the stored state.
+      const requiredEventByMentionId = new Map<string, { entityId: string; type: 'MENTION_ASSIGNED' | 'MENTION_REASSIGNED' }>()
+      for (const update of input.mentionUpdates) {
+        const mentionRow = transaction.select().from(mentions).where(eq(mentions.id, update.id)).get()
+        if (mentionRow === undefined || mentionRow.documentId !== input.documentId) {
+          throw new Error('Mention must belong to the resolved Document')
+        }
+        const previousEntityId = mentionRow.entityId
+        if (update.entityId === null && previousEntityId !== null) {
+          throw new Error('Resolution completion must not clear a Mention assignment')
+        }
+        if (update.entityId !== null && update.entityId !== previousEntityId) {
+          requiredEventByMentionId.set(update.id, {
+            entityId: update.entityId,
+            type: previousEntityId === null ? 'MENTION_ASSIGNED' : 'MENTION_REASSIGNED'
+          })
+        }
+      }
+
+      // Verify candidate and event ownership before any write. New Entities are
+      // inserted by this same transaction, so their ids are accepted by reference.
+      const mentionRowsById = new Map<string, typeof mentions.$inferSelect>()
+      const findMentionRow = (mentionId: string) => {
+        const cached = mentionRowsById.get(mentionId)
+        if (cached !== undefined) return cached
+        const row = transaction.select().from(mentions).where(eq(mentions.id, mentionId)).get()
+        if (row !== undefined) mentionRowsById.set(mentionId, row)
+        return row
+      }
+      const createdEntityIds = new Set((input.entitiesToCreate ?? []).map((created) => created.entity.id))
+      const assertEntityInDocumentMatter = (entityId: string, description: string) => {
+        if (createdEntityIds.has(entityId)) return
+        const entityRow = transaction
+          .select({ matterId: entities.matterId })
+          .from(entities)
+          .where(eq(entities.id, entityId))
+          .get()
+        if (entityRow === undefined || entityRow.matterId !== documentRow.matterId) {
+          throw new Error(`${description} must belong to the Document Matter`)
+        }
+      }
+      for (const candidate of input.candidates) {
+        const mentionRow = findMentionRow(candidate.mentionId)
+        if (mentionRow === undefined || mentionRow.documentId !== input.documentId) {
+          throw new Error('Candidate Mention must belong to the resolved Document')
+        }
+        assertEntityInDocumentMatter(candidate.candidateEntityId, 'Candidate Entity')
+      }
+      // Events must record the actual mutations: the transition derived from the
+      // stored Mention state dictates the required event type, every assignment
+      // event must match its Mention update, and every transitioning Mention must
+      // have exactly one event. Completion events are always SYSTEM-recorded; user
+      // transitions go through assignMention. No other event types may be smuggled in.
+      const assignmentEventMentionIds = new Set<string>()
+      for (const event of input.events) {
+        if (event.matterId !== documentRow.matterId) {
+          throw new Error('Resolution event must belong to the Document Matter')
+        }
+        if (event.type !== 'MENTION_ASSIGNED' && event.type !== 'MENTION_REASSIGNED') {
+          throw new Error('Resolution completion only records Mention assignment events')
+        }
+        if (event.actor !== 'SYSTEM') {
+          throw new Error('Resolution completion events must be recorded by the SYSTEM actor')
+        }
+        if (event.mentionId === undefined || event.entityId === undefined) {
+          throw new Error('Assignment event must reference its Mention and Entity')
+        }
+        const mentionRow = findMentionRow(event.mentionId)
+        if (mentionRow === undefined || mentionRow.documentId !== input.documentId) {
+          throw new Error('Resolution event Mention must belong to the resolved Document')
+        }
+        assertEntityInDocumentMatter(event.entityId, 'Resolution event Entity')
+        const required = requiredEventByMentionId.get(event.mentionId)
+        if (required === undefined || required.entityId !== event.entityId || required.type !== event.type) {
+          throw new Error('Assignment event must match the Mention update it records')
+        }
+        if (assignmentEventMentionIds.has(event.mentionId)) {
+          throw new Error('A Mention assignment must have exactly one assignment event')
+        }
+        assignmentEventMentionIds.add(event.mentionId)
+      }
+      for (const mentionId of requiredEventByMentionId.keys()) {
+        if (!assignmentEventMentionIds.has(mentionId)) {
+          throw new Error('Every Mention assignment must be recorded by an assignment event')
+        }
+      }
+
+      // Insert new Entities first so links and Mention updates can reference them.
+      for (const created of input.entitiesToCreate ?? []) {
+        if (created.entity.matterId !== documentRow.matterId) {
+          throw new Error('Entity must remain inside the Document Matter')
+        }
+        transaction
+          .insert(entities)
+          .values({
+            id: created.entity.id,
+            matterId: created.entity.matterId,
+            entityType: created.entity.type,
+            publicToken: created.entity.publicToken,
+            status: created.entity.status,
+            ...(created.entity.resolutionConfidence === undefined
+              ? {}
+              : { resolutionConfidence: created.entity.resolutionConfidence }),
+            createdAt: created.entity.createdAt,
+            updatedAt: created.entity.updatedAt
+          })
+          .run()
+        transaction.insert(entityAliases).values(created.primaryAlias).run()
+        transaction.insert(resolutionEvents).values(toResolutionEventInsert(created.event)).run()
+      }
+
+      // Upsert ProtectedValues by (matterId, type, fingerprint) and map caller ids to persisted ids.
+      const resolvedProtectedValueIds = new Map<string, string>()
+      for (const value of input.protectedValues) {
+        if (value.matterId !== documentRow.matterId) {
+          throw new Error('ProtectedValue must remain inside the Document Matter')
+        }
+        const existing = transaction
+          .select()
+          .from(protectedValues)
+          .where(
+            and(
+              eq(protectedValues.matterId, value.matterId),
+              eq(protectedValues.valueType, value.type),
+              eq(protectedValues.fingerprint, value.fingerprint)
+            )
+          )
+          .get()
+        if (existing === undefined) {
+          transaction.insert(protectedValues).values(toProtectedValueInsert(value)).run()
+          resolvedProtectedValueIds.set(value.id, value.id)
+        } else {
+          resolvedProtectedValueIds.set(value.id, existing.id)
+        }
+      }
+      const resolveProtectedValueId = (id: string | null): string | null =>
+        id === null ? null : (resolvedProtectedValueIds.get(id) ?? id)
+
+      for (const link of input.entityProtectedValueLinks) {
+        const protectedValueId = resolveProtectedValueId(link.protectedValueId)
+        if (protectedValueId === null) throw new Error('Entity ProtectedValue link requires a ProtectedValue')
+        const existingLink = transaction
+          .select({ entityId: entityProtectedValues.entityId })
+          .from(entityProtectedValues)
+          .where(
+            and(
+              eq(entityProtectedValues.entityId, link.entityId),
+              eq(entityProtectedValues.protectedValueId, protectedValueId)
+            )
+          )
+          .get()
+        if (existingLink !== undefined) continue
+        const entityRow = transaction
+          .select({ matterId: entities.matterId })
+          .from(entities)
+          .where(eq(entities.id, link.entityId))
+          .get()
+        if (entityRow === undefined || entityRow.matterId !== documentRow.matterId) {
+          throw new Error('Entity was not found in the Document Matter')
+        }
+        const valueRow = transaction
+          .select({ matterId: protectedValues.matterId })
+          .from(protectedValues)
+          .where(eq(protectedValues.id, protectedValueId))
+          .get()
+        if (valueRow === undefined || valueRow.matterId !== documentRow.matterId) {
+          throw new Error('ProtectedValue was not found in the Document Matter')
+        }
+        transaction
+          .insert(entityProtectedValues)
+          .values({
+            entityId: link.entityId,
+            protectedValueId,
+            relationshipType: link.relationshipType,
+            confidence: link.confidence,
+            isPrimary: link.isPrimary,
+            createdAt: link.createdAt
+          })
+          .run()
+      }
+
+      for (const update of input.mentionUpdates) {
+        const result = transaction
+          .update(mentions)
+          .set({
+            fingerprint: update.fingerprint,
+            protectedValueId: resolveProtectedValueId(update.protectedValueId),
+            entityId: update.entityId
+          })
+          .where(eq(mentions.id, update.id))
+          .run()
+        if (result.changes !== 1) throw new Error('Mention state changed before entity resolution completed')
+      }
+
+      for (const candidate of input.candidates) {
+        transaction
+          .insert(resolutionCandidates)
+          .values({
+            id: candidate.id,
+            mentionId: candidate.mentionId,
+            candidateEntityId: candidate.candidateEntityId,
+            score: candidate.score,
+            state: candidate.state,
+            algorithmVersion: candidate.algorithmVersion,
+            createdAt: candidate.createdAt,
+            ...(candidate.resolvedAt === undefined ? {} : { resolvedAt: candidate.resolvedAt })
+          })
+          .run()
+        if (candidate.evidence.length > 0) {
+          transaction
+            .insert(resolutionEvidence)
+            .values(candidate.evidence.map((evidence) => ({ ...evidence, candidateId: candidate.id })))
+            .run()
+        }
+      }
+
+      for (const event of input.events) {
+        transaction.insert(resolutionEvents).values(toResolutionEventInsert(event)).run()
+      }
+
+      const jobResult = transaction
+        .update(processingJobs)
+        .set({ status: 'COMPLETED', progress: 1, checkpoint: null, finishedAt: input.finishedAt })
+        .where(and(eq(processingJobs.id, input.jobId), eq(processingJobs.status, 'RUNNING')))
+        .run()
+      const documentResult = transaction
+        .update(documents)
+        .set({ parseStatus: 'READY', updatedAt: input.finishedAt })
+        .where(and(eq(documents.id, input.documentId), eq(documents.parseStatus, 'RESOLVING')))
+        .run()
+      if (jobResult.changes !== 1 || documentResult.changes !== 1) {
+        throw new Error('Entity resolution state changed before completion')
+      }
+      const completedDocument = transaction.select().from(documents).where(eq(documents.id, input.documentId)).get()
+      const completedJob = transaction.select().from(processingJobs).where(eq(processingJobs.id, input.jobId)).get()
+      if (completedDocument === undefined || completedJob === undefined) {
+        throw new Error('Completed entity resolution state was not found')
+      }
+      return { document: toDocument(completedDocument), job: toProcessingJob(completedJob) }
+    })
+  }
+
+  fail(documentId: string, jobId: string, errorCipher: Buffer, finishedAt: number): EntityResolutionResult {
+    if (errorCipher.length === 0) throw new Error('errorCipher must not be empty')
+    return this.db.transaction((transaction) => {
+      const documentRow = transaction.select().from(documents).where(eq(documents.id, documentId)).get()
+      const jobRow = transaction.select().from(processingJobs).where(eq(processingJobs.id, jobId)).get()
+      if (documentRow === undefined || documentRow.parseStatus !== 'RESOLVING') {
+        throw new Error('Document is not currently resolving entities')
+      }
+      if (
+        jobRow === undefined ||
+        jobRow.documentId !== documentId ||
+        jobRow.jobType !== 'RESOLVE' ||
+        jobRow.status !== 'RUNNING' ||
+        jobRow.startedAt === null
+      ) {
+        throw new Error('Entity resolution job is not running')
+      }
+      if (finishedAt < documentRow.updatedAt || finishedAt < jobRow.startedAt) {
+        throw new Error('Entity resolution timestamp must not move backwards')
+      }
+      transaction
+        .update(processingJobs)
+        .set({ status: 'FAILED', errorCipher, finishedAt })
+        .where(and(eq(processingJobs.id, jobId), eq(processingJobs.status, 'RUNNING')))
+        .run()
+      transaction
+        .update(documents)
+        .set({ parseStatus: 'FAILED', updatedAt: finishedAt })
+        .where(and(eq(documents.id, documentId), eq(documents.parseStatus, 'RESOLVING')))
+        .run()
+      const failedDocument = transaction.select().from(documents).where(eq(documents.id, documentId)).get()
+      const failedJob = transaction.select().from(processingJobs).where(eq(processingJobs.id, jobId)).get()
+      if (failedDocument === undefined || failedJob === undefined) {
+        throw new Error('Failed entity resolution state was not found')
+      }
+      return { document: toDocument(failedDocument), job: toProcessingJob(failedJob) }
+    })
+  }
+
+  assignMention(input: AssignMentionInput): Mention {
+    return this.db.transaction((transaction) => {
+      const mentionRow = transaction.select().from(mentions).where(eq(mentions.id, input.mentionId)).get()
+      if (mentionRow === undefined) throw new Error('Mention was not found')
+      const entityRow = transaction.select().from(entities).where(eq(entities.id, input.entityId)).get()
+      if (entityRow === undefined) throw new Error('Entity was not found')
+
+      const mention = toMention(mentionRow)
+      const assigned = assignMentionToEntity(mention, toEntity(entityRow))
+      // A same-Entity assignment is a no-op, not a transition: recording a
+      // MENTION_REASSIGNED event for it would fabricate audit history.
+      if (mention.entityId === input.entityId) {
+        throw new Error('Mention is already assigned to this Entity')
+      }
+      const expectedType = mention.entityId === undefined ? 'MENTION_ASSIGNED' : 'MENTION_REASSIGNED'
+      if (input.event.type !== expectedType) {
+        throw new Error('Resolution event type must match the Mention assignment transition')
+      }
+      // This entry point records user decisions only; SYSTEM assignments are
+      // produced by resolution completion.
+      if (input.event.actor !== 'USER') {
+        throw new Error('Manual assignment events must be recorded by the USER actor')
+      }
+      // The audit event must bind to the actual mutation it records.
+      if (input.event.mentionId !== input.mentionId) {
+        throw new Error('Resolution event must reference the assigned Mention')
+      }
+      if (input.event.entityId !== input.entityId) {
+        throw new Error('Resolution event must reference the assigned Entity')
+      }
+      if (input.event.matterId !== mentionRow.matterId) {
+        throw new Error('Resolution event must belong to the Mention Matter')
+      }
+
+      const result = transaction
+        .update(mentions)
+        .set({ entityId: assigned.entityId })
+        .where(eq(mentions.id, input.mentionId))
+        .run()
+      if (result.changes !== 1) throw new Error('Mention state changed before assignment')
+
+      // Attach the Mention's ProtectedValue to the Entity so later fingerprint
+      // lookups find the confirmed identity; the link is idempotent.
+      if (mentionRow.protectedValueId !== null) {
+        const existingLink = transaction
+          .select({ entityId: entityProtectedValues.entityId })
+          .from(entityProtectedValues)
+          .where(
+            and(
+              eq(entityProtectedValues.entityId, input.entityId),
+              eq(entityProtectedValues.protectedValueId, mentionRow.protectedValueId)
+            )
+          )
+          .get()
+        if (existingLink === undefined) {
+          transaction
+            .insert(entityProtectedValues)
+            .values({
+              entityId: input.entityId,
+              protectedValueId: mentionRow.protectedValueId,
+              relationshipType: 'OWNER',
+              confidence: 1,
+              isPrimary: true,
+              createdAt: input.resolvedAt
+            })
+            .run()
+        }
+      }
+
+      transaction.insert(resolutionEvents).values(toResolutionEventInsert(input.event)).run()
+
+      // A user decision closes every open review candidate for the Mention.
+      transaction
+        .update(resolutionCandidates)
+        .set({ state: 'ACCEPTED', resolvedAt: input.resolvedAt })
+        .where(
+          and(
+            eq(resolutionCandidates.mentionId, input.mentionId),
+            eq(resolutionCandidates.candidateEntityId, input.entityId),
+            eq(resolutionCandidates.state, 'PENDING')
+          )
+        )
+        .run()
+      transaction
+        .update(resolutionCandidates)
+        .set({ state: 'REJECTED', resolvedAt: input.resolvedAt })
+        .where(
+          and(
+            eq(resolutionCandidates.mentionId, input.mentionId),
+            ne(resolutionCandidates.candidateEntityId, input.entityId),
+            eq(resolutionCandidates.state, 'PENDING')
+          )
+        )
+        .run()
+
+      const updated = transaction.select().from(mentions).where(eq(mentions.id, input.mentionId)).get()
+      if (updated === undefined) throw new Error('Assigned Mention was not found')
+      return toMention(updated)
+    })
+  }
+
+  addConstraint(input: AddEntityConstraintInput): EntityConstraint {
+    const constraint = canonicalizeEntityConstraint(input.constraint)
+    if (input.event.type !== 'CONSTRAINT_CREATED') {
+      throw new Error('Resolution event type must be CONSTRAINT_CREATED')
+    }
+    // The audit event must bind to the actual constraint it records.
+    if (input.event.matterId !== constraint.matterId) {
+      throw new Error('Resolution event must belong to the constraint Matter')
+    }
+    if (input.event.entityId === undefined) {
+      throw new Error('Resolution event must reference a constrained Entity')
+    }
+    if (input.event.entityId !== constraint.entityAId && input.event.entityId !== constraint.entityBId) {
+      throw new Error('Resolution event must reference a constrained Entity')
+    }
+    const expectedActor = constraint.source === 'USER' ? 'USER' : 'SYSTEM'
+    if (input.event.actor !== expectedActor) {
+      throw new Error('Resolution event actor must match the constraint source')
+    }
+    return this.db.transaction((transaction) => {
+      // The scope trigger backstops this, but verify precisely: both Entities
+      // must exist, belong to the constraint Matter, and be active.
+      for (const entityId of [constraint.entityAId, constraint.entityBId]) {
+        const entityRow = transaction
+          .select({ matterId: entities.matterId, status: entities.status })
+          .from(entities)
+          .where(eq(entities.id, entityId))
+          .get()
+        if (entityRow === undefined || entityRow.matterId !== constraint.matterId) {
+          throw new Error('Constrained Entities must belong to the constraint Matter')
+        }
+        if (entityRow.status !== 'ACTIVE') {
+          throw new Error('Constrained Entities must be active')
+        }
+      }
+      transaction
+        .insert(entityConstraints)
+        .values({
+          id: constraint.id,
+          matterId: constraint.matterId,
+          entityAId: constraint.entityAId,
+          entityBId: constraint.entityBId,
+          constraintType: constraint.type,
+          reason: constraint.reason,
+          source: constraint.source,
+          createdAt: constraint.createdAt
+        })
+        .run()
+      transaction.insert(resolutionEvents).values(toResolutionEventInsert(input.event)).run()
+      return constraint
+    })
+  }
+
+  findConstraints(matterId: string): readonly EntityConstraint[] {
+    return this.db
+      .select()
+      .from(entityConstraints)
+      .where(eq(entityConstraints.matterId, matterId))
+      .orderBy(asc(entityConstraints.createdAt), asc(entityConstraints.id))
+      .all()
+      .map(toEntityConstraint)
+  }
+
+  findMentionById(mentionId: string): Mention | undefined {
+    const row = this.db.select().from(mentions).where(eq(mentions.id, mentionId)).get()
+    return row === undefined ? undefined : toMention(row)
+  }
+
+  private requireJob(id: string): ProcessingJob {
+    const row = this.db.select().from(processingJobs).where(eq(processingJobs.id, id)).get()
+    if (row === undefined) throw new Error('ProcessingJob was not found')
+    return toProcessingJob(row)
   }
 }
