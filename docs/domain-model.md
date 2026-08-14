@@ -98,6 +98,25 @@ failures may retry parsing, while detection failures retain the persisted Docume
 Model and may retry detection. A completed detection is idempotent and reuses its
 existing Mention set rather than creating duplicate jobs or Mentions.
 
+Entity resolution extends the state machine to the end of the local pipeline:
+
+```text
+DETECTED -> RESOLVING -> READY
+                     `-> FAILED -> RESOLVING
+```
+
+Resolution decrypts each Mention transiently, normalizes and fingerprints its value,
+creates or reuses the Matter-scoped ProtectedValue, scores candidates with the
+`er-v1` evidence rules, and applies the decision atomically: `AUTO_LINK` assigns the
+Mention to the candidate Entity (`MENTION_ASSIGNED`, actor SYSTEM), `NEW_ENTITY`
+creates an Entity with a random Public Token and a synthetic primary alias that never
+contains Mention plaintext, `REVIEW` persists pending candidates for human review,
+and `UNRESOLVED` leaves the Mention assigned to its ProtectedValue only. A `READY`
+Document's resolution is idempotent. Manual `assign`/`reassign` and Must-Link/
+Cannot-Link constraints are application operations that append `MENTION_ASSIGNED`,
+`MENTION_REASSIGNED`, or `CONSTRAINT_CREATED` ResolutionEvents in the same
+transaction as the mutation.
+
 ## DocumentPage
 
 One logical page in a Document.

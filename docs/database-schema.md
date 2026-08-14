@@ -140,11 +140,14 @@ batch, completes its ProcessingJob, and changes the Document to `DETECTED`. Boun
 triggers continue to enforce matching Matter, Document, Page, and Block ownership.
 Detection never sets `entity_id` or `protected_value_id`.
 
-The V1 rule-detection workflow intentionally leaves `fingerprint` null. A Mention
-fingerprint requires both type-specific value normalization and a Matter-scoped
-search-key resolver; neither contract is defined at this stage. The persistence key
-must not be reused as the search key. Entity Resolution work must define those
-contracts before computing or backfilling Mention fingerprints.
+The V1 rule-detection workflow leaves `fingerprint` null. Entity Resolution backfills
+it while resolving: the Mention text is decrypted transiently, normalized with the
+type-specific rules of the entity-resolution package, and fingerprinted as
+`HMAC-SHA256(matter_search_key, normalized_value)`. The Matter search key is derived
+per Matter from the application search key (`HMAC-SHA256(search_key,
+"matter-search:<matter-id>")`); the persistence key must not be reused as the search
+key. Entity Resolution writes `fingerprint` and `protected_value_id` together with any
+`entity_id` assignment in its atomic completion transaction.
 
 ### entities
 
@@ -268,6 +271,11 @@ Indexes:
 
 Unique: `(mention_id, candidate_entity_id)`.
 
+Entity Resolution persists every scored candidate with its evidence in the same
+transaction that completes the `RESOLVE` ProcessingJob. Score and state are validated
+by the repository and domain layers; `algorithm_version` identifies the scoring rule
+set (V1: `er-v1`).
+
 ### resolution_evidence
 
 | Column | Type | Constraints |
@@ -343,12 +351,34 @@ Indexes:
 - `idx_processing_jobs_status(status)`
 
 ProcessingJob type, status, progress, timestamps, and encrypted-error presence are
-checked by SQLite. A running `DETECT` job has `started_at` and no terminal timestamp;
-a completed job has progress `1`; a failed job has `finished_at` and a non-null
-encrypted error. Detection checkpoints are non-sensitive block counts only.
+checked by SQLite. A running `DETECT` or `RESOLVE` job has `started_at` and no
+terminal timestamp; a completed job has progress `1`; a failed job has `finished_at`
+and a non-null encrypted error. Detection checkpoints are non-sensitive block counts
+only; resolution checkpoints are non-sensitive mention counts only.
+
+Entity Resolution owns the `DETECTED -> RESOLVING -> READY` transition. `begin`
+accepts a `DETECTED` Document, or a `FAILED` one whose latest `RESOLVE` job failed
+(detection failures retain the model and retry detection instead). Completing the
+job, inserting auto-created Entities with their primary alias and `ENTITY_CREATED`
+event, upserting ProtectedValues by `(matter_id, value_type, fingerprint)`, backfilling
+Mention fingerprints and assignments, inserting candidates with evidence and
+ResolutionEvents, and setting the Document to `READY` happen in one transaction. A
+`READY` Document's resolution is idempotent and reused on repeat calls.
+
+Completion events are bound to the actual mutations: the stored Mention assignment
+dictates the required event (`null -> E` needs exactly one SYSTEM
+`MENTION_ASSIGNED`, `E1 -> E2` needs exactly one SYSTEM `MENTION_REASSIGNED`,
+`E1 -> E1` forbids an event, and clearing an assignment is rejected outright).
+Constraints are likewise bound: both Entities must exist, be active, and belong to
+the constraint Matter, and the audit event must reference the canonical pair.
 
 The error payload uses authenticated context
 `<job-id>:processingJob.error` and stores only a stable application error code.
+
+ResolutionEvent payloads use authenticated context
+`<event-id>:resolutionEvent.payload` and store only decision metadata (decision,
+candidate entity id, algorithm version), never plaintext protected values.
+ProtectedValue ciphertext uses `<protected-value-id>:protectedValue.value`.
 
 ## Encryption Envelope
 

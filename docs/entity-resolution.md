@@ -423,6 +423,56 @@ Record enough information for future supervised model training:
 
 Do not store raw decrypted protected values in analytics/debug logs.
 
+## V1 Implemented Subset
+
+The implemented V1 workflow deliberately covers only the deterministic core:
+
+- **Normalization** (matching/fingerprinting only, never overwrites source text):
+  NFKC plus whitespace collapsing for every type; EMAIL lowercases; PHONE strips
+  separators and a `+86`/`86` prefix before an 11-digit mobile; ID_CARD removes
+  whitespace and uppercases the check character; BANK_ACCOUNT keeps digits only.
+  Values that fail validation never produce a fingerprint or a hard rule: every
+  type rejects empty text, and ID_CARD additionally requires full GB 11643-1999
+  validation (18-character shape, a valid calendar birth date, and the ISO 7064
+  MOD 11-2 check digit) before it may trigger a hard identity rule.
+- **Fingerprinting**: `HMAC-SHA256(matter_search_key, normalized_value)` where the
+  Matter search key is derived from the application search key per Matter. Entity
+  Resolution computes and backfills Mention fingerprints during resolution.
+- **Type coverage**: PERSON, ORGANIZATION, PHONE, EMAIL, ID_CARD, BANK_ACCOUNT, and
+  ADDRESS Mentions map to ProtectedValue types. CASE_NUMBER, CONTRACT_NUMBER, COURT,
+  LAWYER, and JUDGE are metadata Mentions in V1: no ProtectedValue, no candidates.
+- **Candidates and evidence** (`algorithm_version = "er-v1"`): shared ProtectedValue
+  by fingerprint (SAME_ID_CARD 40 with hard MUST_LINK; SAME_PHONE/SAME_EMAIL/
+  SAME_BANK_ACCOUNT 40 as strong evidence only), exact normalized primary-alias or
+  name-ProtectedValue fingerprint match (NAME_EXACT 25), conflicting ID_CARD
+  (CONFLICTING_ID_CARD, hard CANNOT_LINK), explicit user CANNOT_LINK constraints
+  (hard CANNOT_LINK), and explicit user MUST_LINK constraints (hard MUST_LINK).
+  Hard-rule evaluation order follows the documented pipeline: user CANNOT_LINK,
+  then hard identity conflict, then MUST_LINK, then soft scoring — a conflict
+  overrides every Must-Link. A conflict requires an actual validated ID_CARD in
+  the current document; a document without identifiers is absence of evidence and
+  never produces CONFLICTING_ID_CARD. User constraints apply where an anchor ties
+  the Mention to a constrained party: the shared ProtectedValue in the identifier
+  branch, or the constrained sibling candidate in the name branch (MUST_LINK
+  only; a CANNOT_LINK between two name candidates says nothing about which one
+  the Mention belongs to and therefore eliminates none). Confirmed assignments
+  attach the Mention's ProtectedValue to the Entity (idempotently, inside the
+  assignment/completion transaction), so later fingerprint lookups find the
+  confirmed identity.
+- **Decisions**: hard CANNOT-Link rejects a candidate before all scoring; exactly one
+  hard MUST_LINK auto-links; conflicting MUST_LINKs go to review. Soft auto-link
+  requires score >= 90 with a >= 15 margin and is never available for PERSON
+  Mentions. Score >= 65 produces REVIEW, and any scored candidate below that
+  threshold also produces REVIEW rather than a guessed duplicate. NEW_ENTITY is
+  reserved for EXPLICIT or PARTIAL PERSON/ORGANIZATION Mentions with zero eligible
+  candidates; identifier and metadata Mentions fall to UNRESOLVED instead.
+- **Auto-created Entities** receive a random Public Token and a synthetic primary
+  alias derived from the token (never the Mention plaintext, because
+  `entity_aliases.alias` is a plaintext Matter-unique column).
+
+Context extraction, OCR-aware similarity, role/relationship features, and the V2
+model path remain unimplemented.
+
 ## V2 Model Path
 
 Only after sufficient reviewed examples exist, consider replacing the soft scorer with:
