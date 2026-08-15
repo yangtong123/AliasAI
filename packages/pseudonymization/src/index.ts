@@ -1,8 +1,31 @@
+import type { ProtectedValueType, RestorePolicy } from '@aliasai/domain'
+
 export interface Replacement {
   readonly startOffset: number
   readonly endOffset: number
   readonly alias: string
   readonly publicToken: string
+}
+
+/**
+ * Default type-level restore policies. Names and addresses restore freely;
+ * contact and identity identifiers restore only on explicit request; bank
+ * accounts are never restored into rehydrated text. The effective policy is
+ * stamped onto each sanitization mapping at sanitization time.
+ */
+export const DEFAULT_RESTORE_POLICIES: Readonly<Record<ProtectedValueType, RestorePolicy>> = {
+  PERSON_NAME: 'ALWAYS_RESTORE',
+  ORG_NAME: 'ALWAYS_RESTORE',
+  ADDRESS: 'ALWAYS_RESTORE',
+  PHONE: 'RESTORE_ON_REQUEST',
+  EMAIL: 'RESTORE_ON_REQUEST',
+  ID_CARD: 'RESTORE_ON_REQUEST',
+  BANK_ACCOUNT: 'NEVER_RESTORE'
+}
+
+/** Resolves the default restore policy for a ProtectedValue type. */
+export function defaultRestorePolicy(type: ProtectedValueType): RestorePolicy {
+  return DEFAULT_RESTORE_POLICIES[type]
 }
 
 export class PseudonymizationError extends Error {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatPseudonym, pseudonymizeText } from '../src/index'
+import { DEFAULT_RESTORE_POLICIES, defaultRestorePolicy, formatPseudonym, pseudonymizeText } from '../src/index'
 
 describe('pseudonymization', () => {
   it('replaces exact mention ranges with aliases and stable public tokens', () => {
@@ -28,5 +28,16 @@ describe('pseudonymization', () => {
     expect(() => formatPseudonym('Plaintiff〔A〕', '@P-8K3F7A')).toThrow(
       'alias contains reserved pseudonym delimiters'
     )
+  })
+
+  it('assigns type-level default restore policies', () => {
+    expect(defaultRestorePolicy('PERSON_NAME')).toBe('ALWAYS_RESTORE')
+    expect(defaultRestorePolicy('ORG_NAME')).toBe('ALWAYS_RESTORE')
+    expect(defaultRestorePolicy('ADDRESS')).toBe('ALWAYS_RESTORE')
+    expect(defaultRestorePolicy('PHONE')).toBe('RESTORE_ON_REQUEST')
+    expect(defaultRestorePolicy('EMAIL')).toBe('RESTORE_ON_REQUEST')
+    expect(defaultRestorePolicy('ID_CARD')).toBe('RESTORE_ON_REQUEST')
+    expect(defaultRestorePolicy('BANK_ACCOUNT')).toBe('NEVER_RESTORE')
+    expect(Object.keys(DEFAULT_RESTORE_POLICIES)).toHaveLength(7)
   })
 })
