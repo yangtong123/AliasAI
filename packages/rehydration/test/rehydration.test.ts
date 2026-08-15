@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { rehydrateText } from '../src/index'
+import { findPublicTokenReferences, rehydrateText } from '../src/index'
 
 describe('rehydration', () => {
   const mappings = new Map([
@@ -44,5 +44,13 @@ describe('rehydration', () => {
     ])
 
     expect(rehydrateText('Plaintiff A〔@P-8K3F7A〕', overlappingAliases)).toBe('Synthetic Name')
+  })
+
+  it('lists wrapped and bare Public Token references for review scanning', () => {
+    expect(findPublicTokenReferences('原告甲〔@P-8K3F7A〕应举证，被告见 @O-9Z2Y-1Q。prefix@P-NO00T')).toEqual([
+      '@P-8K3F7A',
+      '@O-9Z2Y-1Q'
+    ])
+    expect(findPublicTokenReferences('no tokens here')).toEqual([])
   })
 })

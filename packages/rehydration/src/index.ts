@@ -9,6 +9,20 @@ export interface RehydrationTarget {
 }
 
 /**
+ * Lists every Public Token referenced in the text, wrapped or bare, in order of
+ * appearance. Used after rehydration to surface unknown or tampered tokens for
+ * manual review.
+ */
+export function findPublicTokenReferences(text: string): readonly string[] {
+  const tokens: string[] = []
+  for (const match of text.matchAll(new RegExp(PUBLIC_TOKEN_REFERENCE.source, 'g'))) {
+    const token = match[1] ?? match[2]
+    if (token !== undefined) tokens.push(token)
+  }
+  return tokens
+}
+
+/**
  * Restores an exact pseudonym span selected by its Public Token. The alias list
  * only identifies the beginning of that span; it is never used as the lookup
  * key. Unknown tokens or unexpectedly edited aliases remain verbatim for local
