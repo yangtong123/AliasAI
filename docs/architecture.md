@@ -44,6 +44,51 @@ Electron Desktop
 
 V1 intentionally keeps privacy core and AI network access inside the same Electron main process to reduce implementation complexity. Module boundaries must still prevent AI provider code from depending on Mapping Vault internals.
 
+## Review UI V1 (Step 9)
+
+The desktop review workflow is the first operable local loop: create a Matter,
+import a PDF, run parse → detect → resolve, review mentions, and generate the
+sanitized preview with a local rehydration demo (no AI provider yet).
+
+Layering and boundary rules:
+
+- **Application read model** (`packages/application/src/review-read.ts`,
+  `review-operations.ts`, `sanitized-preview.ts`): DTOs carry decrypted display
+  text (matter/document names, block text, mention text) by design, but never
+  ciphers, keys, or file paths. Decision status is derived at read time from the
+  latest assignment event's actor (AUTO_LINKED vs USER_ASSIGNED) plus candidate
+  state (NEEDS_REVIEW/UNRESOLVED). Preview blockers mirror the sanitization
+  fail-closed predicates exactly.
+- **IPC** (`apps/desktop/main/src/ipc/`): a pure handler registry (no Electron
+  imports) validates every payload with field-level errors and funnels all
+  failures through a single sanitizing envelope — known service errors surface
+  their code and static message; everything else collapses to INTERNAL_ERROR,
+  so paths, stacks, and plaintext inside raw errors never cross the boundary.
+- **Preload**: exactly one bridge function (`invoke(channel, payload)`) gated
+  by a channel allowlist that a drift test keeps in sync with the registered
+  handlers. Preload keeps zero workspace imports.
+- **Renderer**: type-only imports from `@aliasai/application` (erased at
+  build); polls document status while a pipeline stage is in flight; review
+  mutations are disabled once a document is SANITIZED because the artifact is
+  one-shot.
+
+Key bootstrap: main generates the persistence and search keys on first run and
+persists them via Electron `safeStorage` (OS keychain) in `userData`. The
+window and IPC handlers are created only after the keys and database are ready.
+When `safeStorage` is unavailable the app fails closed; `ALIASAI_ALLOW_PLAINTEXT_KEYS=1`
+is a documented development fallback.
+
+Known V1 limitations (deliberate):
+
+- The Python worker resolves from `ALIASAI_PYTHON_COMMAND` /
+  `ALIASAI_NATIVE_WORKER_PATH` or the repository `.venv`; packaged-app
+  (`asar`) resolution needs `extraResources` and is not implemented.
+- `confirm` is an idempotent read-back; a distinct `ENTITY_CONFIRMED` event
+  needs a new repository entry point (invariant 15 does not cover no-op events).
+- `createEntityAndAssign` spans two transactions; a crash in between leaves a
+  harmless unassigned Entity.
+- Job progress is polled by the renderer; push events are a V2 concern.
+
 ## Data Layers
 
 AliasAI separates data into four logical layers.
