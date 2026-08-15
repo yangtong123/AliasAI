@@ -84,6 +84,8 @@ export type MentionDecisionStatus = 'AUTO_LINKED' | 'USER_ASSIGNED' | 'NEEDS_REV
 
 export interface MentionReviewDTO {
   readonly mentionId: string
+  readonly matterId: string
+  readonly documentId: string
   readonly type: MentionType
   readonly strength: MentionStrength
   readonly text: string
@@ -239,6 +241,20 @@ export class ReviewQueryService {
     }
   }
 
+  /** Refreshes a single mention view after a review operation. */
+  getMention(mentionId: string): MentionReviewDTO | undefined {
+    const mention = this.review.findMentionById(mentionId)
+    if (mention === undefined) return undefined
+    const blocks = this.review.findReviewBlocks(mention.documentId)
+    const pageNo = blocks.find((block) => block.id === mention.blockId)?.pageNo ?? 0
+    const entitySummaries = this.loadEntities(mention.matterId)
+    const entitiesById = new Map(entitySummaries.map((entity) => [entity.id, entity]))
+    const candidates = this.review.findCandidatesForMentions([mentionId])
+    const candidatesByMention = new Map<string, CandidateWithEvidence[]>([[mentionId, [...candidates]]])
+    const actors = this.review.findLatestAssignmentActors([mentionId])
+    return this.toMentionDto(mention, pageNo, entitiesById, candidatesByMention, actors)
+  }
+
   private toDocumentSummary(item: DocumentListItem): DocumentSummaryDTO {
     return {
       id: item.document.id,
@@ -324,6 +340,8 @@ export class ReviewQueryService {
 
     return {
       mentionId: mention.id,
+      matterId: mention.matterId,
+      documentId: mention.documentId,
       type: mention.type,
       strength: mention.strength,
       text: this.decryptText(mention.textCipher, mentionTextContext(mention.id), 'MENTION_TEXT'),
