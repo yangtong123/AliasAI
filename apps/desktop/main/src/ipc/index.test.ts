@@ -128,4 +128,10 @@ describe('IPC handler registry', () => {
     const expected = [...ALIASAI_CHANNELS].sort().map((channel) => `aliasai:${channel}`)
     expect([...registered.keys()].sort()).toEqual(expected)
   })
+
+  it('stays in sync with the preload channel allowlist', async () => {
+    const { CHANNELS } = await import('../../../preload/src/channels')
+
+    expect([...CHANNELS].sort()).toEqual([...ALIASAI_CHANNELS].sort())
+  })
 })
