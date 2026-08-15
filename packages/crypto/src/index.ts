@@ -45,6 +45,39 @@ export function generatePublicToken(entityType: 'PERSON' | 'ORGANIZATION'): stri
 }
 
 /**
+ * Generates a Matter-local restoration token for a ProtectedValue. Unlike the
+ * Entity token it is scoped to a single restorable value (a name, an identifier,
+ * a bank account), so one Entity can carry several distinct restoration anchors
+ * with different restore policies.
+ */
+export function generateProtectedValueToken(
+  type: 'PERSON_NAME' | 'ORG_NAME' | 'PHONE' | 'EMAIL' | 'ID_CARD' | 'BANK_ACCOUNT' | 'ADDRESS'
+): string {
+  const prefix = {
+    PERSON_NAME: 'N',
+    ORG_NAME: 'G',
+    PHONE: 'T',
+    EMAIL: 'E',
+    ID_CARD: 'I',
+    BANK_ACCOUNT: 'B',
+    ADDRESS: 'A'
+  }[type]
+  if (prefix === undefined) throw new CryptoInvariantError('unsupported protected value type for token')
+  return `@${prefix}-${randomBytes(8).toString('hex').toUpperCase()}`
+}
+
+/**
+ * Generates a synthetic, human-readable primary alias for an auto-created
+ * Entity. It embeds neither the Entity ID (which would leak a stable outbound
+ * identifier and its timestamp) nor the Public Token (an identity anchor); the
+ * 64-bit random suffix keeps it unique under the Matter-wide alias index.
+ */
+export function generateSyntheticAlias(entityType: 'PERSON' | 'ORGANIZATION'): string {
+  const label = entityType === 'PERSON' ? 'Person' : 'Organization'
+  return `${label} ${randomBytes(8).toString('hex').toUpperCase()}`
+}
+
+/**
  * Encrypts bytes into the versioned V1 binary envelope:
  * version | algorithm | nonce | ciphertext | authentication tag.
  */
