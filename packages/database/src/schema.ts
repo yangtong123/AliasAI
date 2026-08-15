@@ -183,6 +183,9 @@ export const protectedValues = sqliteTable(
   },
   (table) => [
     uniqueIndex('uq_protected_values_matter_type_fingerprint').on(table.matterId, table.valueType, table.fingerprint),
+    uniqueIndex('uq_protected_values_matter_public_token')
+      .on(table.matterId, table.publicToken)
+      .where(sql`${table.publicToken} IS NOT NULL`),
     index('idx_protected_values_lookup').on(table.matterId, table.valueType, table.fingerprint)
   ]
 )
@@ -470,6 +473,83 @@ export const processingJobs = sqliteTable(
   ]
 )
 
+export const sanitizedDocuments = sqliteTable(
+  'sanitized_documents',
+  {
+    id: text('id').primaryKey(),
+    matterId: text('matter_id')
+      .notNull()
+      .references(() => matters.id),
+    documentId: text('document_id')
+      .notNull()
+      .references(() => documents.id),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => processingJobs.id),
+    createdAt: timestamp('created_at')
+  },
+  (table) => [
+    uniqueIndex('uq_sanitized_documents_document').on(table.documentId),
+    index('idx_sanitized_documents_matter').on(table.matterId)
+  ]
+)
+
+export const sanitizedBlocks = sqliteTable(
+  'sanitized_blocks',
+  {
+    id: text('id').primaryKey(),
+    sanitizedDocumentId: text('sanitized_document_id')
+      .notNull()
+      .references(() => sanitizedDocuments.id),
+    documentId: text('document_id')
+      .notNull()
+      .references(() => documents.id),
+    pageId: text('page_id')
+      .notNull()
+      .references(() => documentPages.id),
+    blockId: text('block_id')
+      .notNull()
+      .references(() => documentBlocks.id),
+    textCipher: encrypted('text_cipher'),
+    createdAt: timestamp('created_at')
+  },
+  (table) => [
+    uniqueIndex('uq_sanitized_blocks_document_block').on(table.sanitizedDocumentId, table.blockId),
+    index('idx_sanitized_blocks_document').on(table.sanitizedDocumentId)
+  ]
+)
+
+export const sanitizationMappings = sqliteTable(
+  'sanitization_mappings',
+  {
+    id: text('id').primaryKey(),
+    matterId: text('matter_id')
+      .notNull()
+      .references(() => matters.id),
+    sanitizedDocumentId: text('sanitized_document_id')
+      .notNull()
+      .references(() => sanitizedDocuments.id),
+    mentionId: text('mention_id')
+      .notNull()
+      .references(() => mentions.id),
+    entityId: text('entity_id')
+      .notNull()
+      .references(() => entities.id),
+    publicToken: text('public_token').notNull(),
+    alias: text('alias').notNull(),
+    restorePolicy: text('restore_policy').$type<RestorePolicy>().notNull(),
+    createdAt: timestamp('created_at')
+  },
+  (table) => [
+    uniqueIndex('uq_sanitization_mappings_mention').on(table.sanitizedDocumentId, table.mentionId),
+    index('idx_sanitization_mappings_matter_token').on(table.matterId, table.publicToken),
+    check(
+      'sanitization_mappings_restore_policy_allowed',
+      sql`${table.restorePolicy} IN ('ALWAYS_RESTORE', 'RESTORE_ON_REQUEST', 'NEVER_RESTORE')`
+    )
+  ]
+)
+
 export const schema = {
   matters,
   documents,
@@ -485,5 +565,8 @@ export const schema = {
   resolutionEvidence,
   entityConstraints,
   resolutionEvents,
-  processingJobs
+  processingJobs,
+  sanitizedDocuments,
+  sanitizedBlocks,
+  sanitizationMappings
 }

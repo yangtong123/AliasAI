@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, ne } from 'drizzle-orm'
 import type {
   Document,
   DocumentBlock,
@@ -6,6 +6,7 @@ import type {
   Entity,
   EntityAlias,
   EntityConstraint,
+  EntityStatus,
   EntityType,
   Matter,
   Mention,
@@ -14,7 +15,10 @@ import type {
   ProtectedValueType,
   ResolutionCandidate,
   ResolutionEvent,
-  ResolutionEvidence
+  ResolutionEvidence,
+  SanitizationMapping,
+  SanitizedBlock,
+  SanitizedDocument
 } from '@aliasai/domain'
 import {
   assertDocument,
@@ -26,6 +30,9 @@ import {
   assertProcessingJob,
   assertProtectedValue,
   assertSameMatter,
+  assertSanitizationMapping,
+  assertSanitizedBlock,
+  assertSanitizedDocument,
   assignMentionToEntity,
   canonicalizeEntityConstraint
 } from '@aliasai/domain'
@@ -44,7 +51,10 @@ import {
   protectedValues,
   resolutionCandidates,
   resolutionEvents,
-  resolutionEvidence
+  resolutionEvidence,
+  sanitizationMappings,
+  sanitizedBlocks,
+  sanitizedDocuments
 } from './schema'
 
 export interface CreateMatterInput {
@@ -1099,6 +1109,8 @@ export interface CompleteEntityResolutionInput {
   /** New Entities (with primary alias and ENTITY_CREATED event) inserted in the same transaction. */
   readonly entitiesToCreate?: readonly CreateEntityWithPrimaryAliasAndEventInput[]
   readonly protectedValues: readonly CreateProtectedValueInput[]
+  /** Existing ProtectedValues whose missing restoration token is filled in atomically. */
+  readonly protectedValueTokenBackfills?: readonly { readonly id: string; readonly publicToken: string }[]
   readonly entityProtectedValueLinks: readonly LinkEntityProtectedValueInput[]
   readonly mentionUpdates: readonly ResolutionMentionUpdate[]
   readonly candidates: readonly CreateResolutionCandidateInput[]
@@ -1445,6 +1457,23 @@ export class EntityResolutionRepository {
           resolvedProtectedValueIds.set(value.id, existing.id)
         }
       }
+      // Fill in a restoration token for values created before this feature. The
+      // guarded update only fills rows that are still tokenless, so a concurrent
+      // backfill never overwrites an existing token.
+      for (const backfill of input.protectedValueTokenBackfills ?? []) {
+        const result = transaction
+          .update(protectedValues)
+          .set({ publicToken: backfill.publicToken })
+          .where(
+            and(
+              eq(protectedValues.id, backfill.id),
+              eq(protectedValues.matterId, documentRow.matterId),
+              isNull(protectedValues.publicToken)
+            )
+          )
+          .run()
+        if (result.changes !== 1) throw new Error('ProtectedValue restoration token backfill failed')
+      }
       const resolveProtectedValueId = (id: string | null): string | null =>
         id === null ? null : (resolvedProtectedValueIds.get(id) ?? id)
 
@@ -1758,6 +1787,520 @@ export class EntityResolutionRepository {
   findMentionById(mentionId: string): Mention | undefined {
     const row = this.db.select().from(mentions).where(eq(mentions.id, mentionId)).get()
     return row === undefined ? undefined : toMention(row)
+  }
+
+  private requireJob(id: string): ProcessingJob {
+    const row = this.db.select().from(processingJobs).where(eq(processingJobs.id, id)).get()
+    if (row === undefined) throw new Error('ProcessingJob was not found')
+    return toProcessingJob(row)
+  }
+}
+
+export type SanitizationMentionSource = Mention & {
+  readonly entityPrimaryAlias: string | null
+  readonly entityStatus: EntityStatus | null
+  readonly protectedValuePublicToken: string | null
+}
+
+export type SanitizationBlockSource = DocumentBlock & {
+  readonly matterId: string
+  readonly textCipher: Buffer
+  readonly mentions: readonly SanitizationMentionSource[]
+}
+
+export interface BeginSanitizationInput {
+  readonly documentId: string
+  readonly jobId: string
+  readonly startedAt: number
+}
+
+export interface BegunSanitization {
+  readonly document: Document
+  readonly job: ProcessingJob
+  readonly blocks: readonly SanitizationBlockSource[]
+}
+
+export type CreateSanitizedBlockInput = SanitizedBlock & {
+  readonly textCipher: Buffer
+}
+
+export interface CompleteSanitizationInput {
+  readonly documentId: string
+  readonly jobId: string
+  readonly sanitizedDocument: SanitizedDocument
+  readonly blocks: readonly CreateSanitizedBlockInput[]
+  readonly mappings: readonly SanitizationMapping[]
+  readonly finishedAt: number
+}
+
+export interface SanitizationResult {
+  readonly document: Document
+  readonly job: ProcessingJob
+  readonly sanitizedDocument: SanitizedDocument
+}
+
+export type RehydrationMappingSource = SanitizationMapping & {
+  readonly protectedValueId: string
+  readonly valueCipher: Buffer
+}
+
+export type SanitizedBlockWithCipher = SanitizedBlock & {
+  readonly textCipher: Buffer
+}
+
+type SanitizedDocumentRow = typeof sanitizedDocuments.$inferSelect
+type SanitizedBlockRow = typeof sanitizedBlocks.$inferSelect
+type SanitizationMappingRow = typeof sanitizationMappings.$inferSelect
+
+function toSanitizedDocument(row: SanitizedDocumentRow): SanitizedDocument {
+  const sanitizedDocument: SanitizedDocument = {
+    id: row.id,
+    matterId: row.matterId,
+    documentId: row.documentId,
+    jobId: row.jobId,
+    createdAt: row.createdAt
+  }
+  assertSanitizedDocument(sanitizedDocument)
+  return sanitizedDocument
+}
+
+function toSanitizedBlockWithCipher(row: SanitizedBlockRow): SanitizedBlockWithCipher {
+  const block: SanitizedBlockWithCipher = {
+    id: row.id,
+    sanitizedDocumentId: row.sanitizedDocumentId,
+    documentId: row.documentId,
+    pageId: row.pageId,
+    blockId: row.blockId,
+    textCipher: row.textCipher,
+    createdAt: row.createdAt
+  }
+  assertSanitizedBlock(block)
+  return block
+}
+
+function toSanitizationMapping(row: SanitizationMappingRow): SanitizationMapping {
+  const mapping: SanitizationMapping = {
+    id: row.id,
+    matterId: row.matterId,
+    sanitizedDocumentId: row.sanitizedDocumentId,
+    mentionId: row.mentionId,
+    entityId: row.entityId,
+    publicToken: row.publicToken,
+    alias: row.alias,
+    restorePolicy: row.restorePolicy,
+    createdAt: row.createdAt
+  }
+  assertSanitizationMapping(mapping)
+  return mapping
+}
+
+/** Owns the SANITIZE job state machine and all sanitized artifact persistence transactions. */
+export class SanitizationRepository {
+  constructor(private readonly db: AliasAiDatabase) {}
+
+  findCompleted(documentId: string): SanitizationResult | undefined {
+    const documentRow = this.db.select().from(documents).where(eq(documents.id, documentId)).get()
+    if (documentRow === undefined || documentRow.parseStatus !== 'SANITIZED') return undefined
+    const jobRow = this.db
+      .select()
+      .from(processingJobs)
+      .where(
+        and(
+          eq(processingJobs.documentId, documentId),
+          eq(processingJobs.jobType, 'SANITIZE'),
+          eq(processingJobs.status, 'COMPLETED')
+        )
+      )
+      .orderBy(desc(processingJobs.finishedAt), desc(processingJobs.createdAt))
+      .limit(1)
+      .get()
+    if (jobRow === undefined) throw new Error('Sanitized Document is missing its completed ProcessingJob')
+    const sanitizedRow = this.db
+      .select()
+      .from(sanitizedDocuments)
+      .where(eq(sanitizedDocuments.documentId, documentId))
+      .get()
+    if (sanitizedRow === undefined) throw new Error('Sanitized Document is missing its sanitized artifact')
+    return {
+      document: toDocument(documentRow),
+      job: toProcessingJob(jobRow),
+      sanitizedDocument: toSanitizedDocument(sanitizedRow)
+    }
+  }
+
+  begin(input: BeginSanitizationInput): BegunSanitization {
+    if (input.jobId.trim().length === 0) throw new Error('jobId must not be empty')
+    return this.db.transaction((transaction) => {
+      const current = transaction.select().from(documents).where(eq(documents.id, input.documentId)).get()
+      if (current === undefined) throw new Error('Document was not found')
+      if (input.startedAt < current.updatedAt) throw new Error('Sanitization timestamp must not move backwards')
+      if (current.parseStatus !== 'READY' && current.parseStatus !== 'FAILED') {
+        throw new Error('Document is not available for sanitization')
+      }
+      if (current.pageCount === null) throw new Error('Document Model is incomplete')
+
+      if (current.parseStatus === 'FAILED') {
+        const latest = transaction
+          .select()
+          .from(processingJobs)
+          .where(and(eq(processingJobs.documentId, input.documentId), eq(processingJobs.jobType, 'SANITIZE')))
+          .orderBy(desc(processingJobs.createdAt))
+          .limit(1)
+          .get()
+        if (latest?.status !== 'FAILED') throw new Error('Failed Document did not fail during sanitization')
+      }
+
+      const pageCount = transaction
+        .select({ id: documentPages.id })
+        .from(documentPages)
+        .where(eq(documentPages.documentId, input.documentId))
+        .all().length
+      if (pageCount !== current.pageCount) throw new Error('Document Model is incomplete')
+      const existingArtifact = transaction
+        .select({ id: sanitizedDocuments.id })
+        .from(sanitizedDocuments)
+        .where(eq(sanitizedDocuments.documentId, input.documentId))
+        .limit(1)
+        .get()
+      if (existingArtifact !== undefined) throw new Error('Document already has a sanitized artifact')
+
+      const job: ProcessingJob = {
+        id: input.jobId,
+        documentId: input.documentId,
+        type: 'SANITIZE',
+        status: 'RUNNING',
+        progress: 0,
+        createdAt: input.startedAt,
+        startedAt: input.startedAt
+      }
+      assertProcessingJob(job)
+      transaction
+        .insert(processingJobs)
+        .values({
+          id: job.id,
+          documentId: job.documentId,
+          jobType: job.type,
+          status: job.status,
+          progress: job.progress,
+          createdAt: job.createdAt,
+          startedAt: job.startedAt
+        })
+        .run()
+      const transition = transaction
+        .update(documents)
+        .set({ parseStatus: 'SANITIZING', updatedAt: input.startedAt })
+        .where(and(eq(documents.id, input.documentId), eq(documents.parseStatus, current.parseStatus)))
+        .run()
+      if (transition.changes !== 1) throw new Error('Document state changed before sanitization began')
+
+      const pageRows = transaction
+        .select()
+        .from(documentPages)
+        .where(eq(documentPages.documentId, input.documentId))
+        .orderBy(asc(documentPages.pageNo), asc(documentPages.id))
+        .all()
+      const blockRows = pageRows.flatMap((page) =>
+        transaction
+          .select()
+          .from(documentBlocks)
+          .where(and(eq(documentBlocks.documentId, input.documentId), eq(documentBlocks.pageId, page.id)))
+          .orderBy(asc(documentBlocks.readingOrder), asc(documentBlocks.id))
+          .all()
+      )
+      const blocks = blockRows.map((blockRow) => {
+        const mentionRows = transaction
+          .select({
+            mention: mentions,
+            entityStatus: entities.status,
+            entityPrimaryAlias: entityAliases.alias,
+            protectedValuePublicToken: protectedValues.publicToken
+          })
+          .from(mentions)
+          .leftJoin(entities, eq(entities.id, mentions.entityId))
+          .leftJoin(
+            entityAliases,
+            and(eq(entityAliases.entityId, mentions.entityId), eq(entityAliases.isPrimary, true))
+          )
+          .leftJoin(protectedValues, eq(protectedValues.id, mentions.protectedValueId))
+          .where(eq(mentions.blockId, blockRow.id))
+          .orderBy(asc(mentions.startOffset), asc(mentions.id))
+          .all()
+        const block: SanitizationBlockSource = {
+          id: blockRow.id,
+          matterId: current.matterId,
+          documentId: blockRow.documentId,
+          pageId: blockRow.pageId,
+          blockType: blockRow.blockType,
+          textCipher: blockRow.textCipher,
+          source: blockRow.source,
+          ...(blockRow.confidence === null ? {} : { confidence: blockRow.confidence }),
+          bbox: { x: blockRow.x, y: blockRow.y, width: blockRow.width, height: blockRow.height },
+          readingOrder: blockRow.readingOrder,
+          mentions: mentionRows.map(({ mention, entityStatus, entityPrimaryAlias, protectedValuePublicToken }) => ({
+            ...toMention(mention),
+            entityPrimaryAlias,
+            entityStatus,
+            protectedValuePublicToken
+          }))
+        }
+        assertDocumentBlock(block)
+        return block
+      })
+      const document = toDocument({ ...current, parseStatus: 'SANITIZING', updatedAt: input.startedAt })
+      return { document, job, blocks }
+    })
+  }
+
+  updateProgress(jobId: string, completedBlocks: number, totalBlocks: number): ProcessingJob {
+    if (!Number.isSafeInteger(completedBlocks) || completedBlocks < 0) throw new Error('completedBlocks must be non-negative')
+    if (!Number.isSafeInteger(totalBlocks) || totalBlocks < 1 || completedBlocks > totalBlocks) {
+      throw new Error('totalBlocks must be positive and no smaller than completedBlocks')
+    }
+    const progress = completedBlocks / totalBlocks
+    const result = this.db
+      .update(processingJobs)
+      .set({ progress, checkpoint: `${completedBlocks}/${totalBlocks}` })
+      .where(and(eq(processingJobs.id, jobId), eq(processingJobs.jobType, 'SANITIZE'), eq(processingJobs.status, 'RUNNING')))
+      .run()
+    if (result.changes !== 1) throw new Error('Sanitization job is not running')
+    return this.requireJob(jobId)
+  }
+
+  complete(input: CompleteSanitizationInput): SanitizationResult {
+    assertSanitizedDocument(input.sanitizedDocument)
+    const blockIds = new Set<string>()
+    for (const block of input.blocks) {
+      assertSanitizedBlock(block)
+      if (block.sanitizedDocumentId !== input.sanitizedDocument.id) {
+        throw new Error('Sanitized block must belong to the sanitized Document')
+      }
+      if (block.documentId !== input.documentId) throw new Error('Sanitized block must belong to the sanitized Document')
+      if (block.textCipher.length === 0) throw new Error('textCipher must not be empty')
+      if (blockIds.has(block.id)) throw new Error('Sanitized block IDs must be unique')
+      blockIds.add(block.id)
+    }
+    const mappingIds = new Set<string>()
+    for (const mapping of input.mappings) {
+      assertSanitizationMapping(mapping)
+      if (mapping.sanitizedDocumentId !== input.sanitizedDocument.id) {
+        throw new Error('Sanitization mapping must belong to the sanitized Document')
+      }
+      if (mappingIds.has(mapping.id)) throw new Error('Sanitization mapping IDs must be unique')
+      mappingIds.add(mapping.id)
+    }
+
+    return this.db.transaction((transaction) => {
+      const documentRow = transaction.select().from(documents).where(eq(documents.id, input.documentId)).get()
+      const jobRow = transaction.select().from(processingJobs).where(eq(processingJobs.id, input.jobId)).get()
+      if (documentRow === undefined || documentRow.parseStatus !== 'SANITIZING') {
+        throw new Error('Document is not currently sanitizing')
+      }
+      if (
+        jobRow === undefined ||
+        jobRow.documentId !== input.documentId ||
+        jobRow.jobType !== 'SANITIZE' ||
+        jobRow.status !== 'RUNNING' ||
+        jobRow.startedAt === null
+      ) {
+        throw new Error('Sanitization job is not running')
+      }
+      if (input.finishedAt < documentRow.updatedAt || input.finishedAt < jobRow.startedAt) {
+        throw new Error('Sanitization timestamp must not move backwards')
+      }
+      if (input.sanitizedDocument.documentId !== input.documentId) {
+        throw new Error('Sanitized Document must belong to the sanitized Document')
+      }
+      if (input.sanitizedDocument.matterId !== documentRow.matterId) {
+        throw new Error('Sanitized Document must remain inside the Document Matter')
+      }
+      if (input.sanitizedDocument.jobId !== input.jobId) {
+        throw new Error('Sanitized Document must reference the running sanitization job')
+      }
+
+      // Completeness: the artifact must cover every source Block exactly once.
+      const sourceBlocks = transaction
+        .select({ id: documentBlocks.id })
+        .from(documentBlocks)
+        .where(eq(documentBlocks.documentId, input.documentId))
+        .all()
+      const submittedBlockIds = new Set(input.blocks.map((block) => block.blockId))
+      if (submittedBlockIds.size !== input.blocks.length) throw new Error('Sanitized block IDs must be unique')
+      if (sourceBlocks.length !== input.blocks.length || sourceBlocks.some((block) => !submittedBlockIds.has(block.id))) {
+        throw new Error('Sanitization must produce exactly one SanitizedBlock per source Block')
+      }
+
+      // Completeness and consistency: every source Mention must map exactly once,
+      // and each mapping must agree with the Mention's current Entity assignment,
+      // primary Alias, and ProtectedValue restoration token.
+      const sourceMentions = transaction
+        .select({
+          id: mentions.id,
+          entityId: mentions.entityId,
+          entityStatus: entities.status,
+          entityPrimaryAlias: entityAliases.alias,
+          protectedValuePublicToken: protectedValues.publicToken
+        })
+        .from(mentions)
+        .leftJoin(entities, eq(entities.id, mentions.entityId))
+        .leftJoin(
+          entityAliases,
+          and(eq(entityAliases.entityId, mentions.entityId), eq(entityAliases.isPrimary, true))
+        )
+        .leftJoin(protectedValues, eq(protectedValues.id, mentions.protectedValueId))
+        .where(eq(mentions.documentId, input.documentId))
+        .all()
+      const mappingByMentionId = new Map<string, SanitizationMapping>()
+      for (const mapping of input.mappings) {
+        if (mapping.matterId !== documentRow.matterId) {
+          throw new Error('Sanitization mapping must remain inside the Document Matter')
+        }
+        if (mappingByMentionId.has(mapping.mentionId)) {
+          throw new Error('Sanitization mapping Mention must be unique')
+        }
+        mappingByMentionId.set(mapping.mentionId, mapping)
+      }
+      if (sourceMentions.length !== input.mappings.length) {
+        throw new Error('Sanitization must produce exactly one mapping per source Mention')
+      }
+      for (const mention of sourceMentions) {
+        const mapping = mappingByMentionId.get(mention.id)
+        if (mapping === undefined) throw new Error('Sanitization mapping must cover every source Mention')
+        if (mapping.entityId !== mention.entityId) {
+          throw new Error('Sanitization mapping Entity must match the Mention assignment')
+        }
+        if (mention.entityStatus !== 'ACTIVE') throw new Error('Sanitization mapping Entity must be active')
+        if (mapping.alias !== mention.entityPrimaryAlias) {
+          throw new Error('Sanitization mapping Alias must match the Entity primary alias')
+        }
+        if (mapping.publicToken !== mention.protectedValuePublicToken) {
+          throw new Error('Sanitization mapping token must match the ProtectedValue restoration token')
+        }
+      }
+
+      transaction.insert(sanitizedDocuments).values(input.sanitizedDocument).run()
+      if (input.blocks.length > 0) {
+        transaction
+          .insert(sanitizedBlocks)
+          .values(
+            input.blocks.map((block) => ({
+              id: block.id,
+              sanitizedDocumentId: block.sanitizedDocumentId,
+              documentId: block.documentId,
+              pageId: block.pageId,
+              blockId: block.blockId,
+              textCipher: block.textCipher,
+              createdAt: block.createdAt
+            }))
+          )
+          .run()
+      }
+      if (input.mappings.length > 0) {
+        transaction.insert(sanitizationMappings).values(input.mappings.map((mapping) => ({ ...mapping }))).run()
+      }
+      const jobResult = transaction
+        .update(processingJobs)
+        .set({ status: 'COMPLETED', progress: 1, checkpoint: null, finishedAt: input.finishedAt })
+        .where(and(eq(processingJobs.id, input.jobId), eq(processingJobs.status, 'RUNNING')))
+        .run()
+      const documentResult = transaction
+        .update(documents)
+        .set({ parseStatus: 'SANITIZED', updatedAt: input.finishedAt })
+        .where(and(eq(documents.id, input.documentId), eq(documents.parseStatus, 'SANITIZING')))
+        .run()
+      if (jobResult.changes !== 1 || documentResult.changes !== 1) {
+        throw new Error('Sanitization state changed before completion')
+      }
+      const completedDocument = transaction.select().from(documents).where(eq(documents.id, input.documentId)).get()
+      const completedJob = transaction.select().from(processingJobs).where(eq(processingJobs.id, input.jobId)).get()
+      if (completedDocument === undefined || completedJob === undefined) {
+        throw new Error('Completed sanitization state was not found')
+      }
+      return {
+        document: toDocument(completedDocument),
+        job: toProcessingJob(completedJob),
+        sanitizedDocument: input.sanitizedDocument
+      }
+    })
+  }
+
+  fail(documentId: string, jobId: string, errorCipher: Buffer, finishedAt: number): { document: Document; job: ProcessingJob } {
+    if (errorCipher.length === 0) throw new Error('errorCipher must not be empty')
+    return this.db.transaction((transaction) => {
+      const documentRow = transaction.select().from(documents).where(eq(documents.id, documentId)).get()
+      const jobRow = transaction.select().from(processingJobs).where(eq(processingJobs.id, jobId)).get()
+      if (documentRow === undefined || documentRow.parseStatus !== 'SANITIZING') {
+        throw new Error('Document is not currently sanitizing')
+      }
+      if (
+        jobRow === undefined ||
+        jobRow.documentId !== documentId ||
+        jobRow.jobType !== 'SANITIZE' ||
+        jobRow.status !== 'RUNNING' ||
+        jobRow.startedAt === null
+      ) {
+        throw new Error('Sanitization job is not running')
+      }
+      if (finishedAt < documentRow.updatedAt || finishedAt < jobRow.startedAt) {
+        throw new Error('Sanitization timestamp must not move backwards')
+      }
+      transaction
+        .update(processingJobs)
+        .set({ status: 'FAILED', errorCipher, finishedAt })
+        .where(and(eq(processingJobs.id, jobId), eq(processingJobs.status, 'RUNNING')))
+        .run()
+      transaction
+        .update(documents)
+        .set({ parseStatus: 'FAILED', updatedAt: finishedAt })
+        .where(and(eq(documents.id, documentId), eq(documents.parseStatus, 'SANITIZING')))
+        .run()
+      const failedDocument = transaction.select().from(documents).where(eq(documents.id, documentId)).get()
+      const failedJob = transaction.select().from(processingJobs).where(eq(processingJobs.id, jobId)).get()
+      if (failedDocument === undefined || failedJob === undefined) {
+        throw new Error('Failed sanitization state was not found')
+      }
+      return { document: toDocument(failedDocument), job: toProcessingJob(failedJob) }
+    })
+  }
+
+  findSanitizedBlocks(sanitizedDocumentId: string): readonly SanitizedBlockWithCipher[] {
+    return this.db
+      .select({ block: sanitizedBlocks })
+      .from(sanitizedBlocks)
+      .innerJoin(documentBlocks, eq(documentBlocks.id, sanitizedBlocks.blockId))
+      .where(eq(sanitizedBlocks.sanitizedDocumentId, sanitizedDocumentId))
+      .orderBy(asc(documentBlocks.readingOrder), asc(sanitizedBlocks.id))
+      .all()
+      .map(({ block }) => toSanitizedBlockWithCipher(block))
+  }
+
+  findRehydrationMappings(sanitizedDocumentId: string): readonly RehydrationMappingSource[] {
+    return this.db
+      .select({
+        mapping: sanitizationMappings,
+        protectedValueId: protectedValues.id,
+        valueCipher: protectedValues.valueCipher
+      })
+      .from(sanitizationMappings)
+      .innerJoin(mentions, eq(mentions.id, sanitizationMappings.mentionId))
+      .innerJoin(protectedValues, eq(protectedValues.id, mentions.protectedValueId))
+      .where(eq(sanitizationMappings.sanitizedDocumentId, sanitizedDocumentId))
+      .orderBy(asc(mentions.startOffset), asc(sanitizationMappings.id))
+      .all()
+      .map(({ mapping, protectedValueId, valueCipher }) => ({
+        ...toSanitizationMapping(mapping),
+        protectedValueId,
+        valueCipher
+      }))
+  }
+
+  findEntityAliases(matterId: string, entityId: string): readonly string[] {
+    return this.db
+      .select({ alias: entityAliases.alias })
+      .from(entityAliases)
+      .where(and(eq(entityAliases.matterId, matterId), eq(entityAliases.entityId, entityId)))
+      .orderBy(asc(entityAliases.createdAt), asc(entityAliases.id))
+      .all()
+      .map(({ alias }) => alias)
   }
 
   private requireJob(id: string): ProcessingJob {

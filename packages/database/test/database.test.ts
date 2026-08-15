@@ -160,7 +160,10 @@ describe('SQLite schema and repositories', () => {
       'protected_values',
       'resolution_candidates',
       'resolution_events',
-      'resolution_evidence'
+      'resolution_evidence',
+      'sanitization_mappings',
+      'sanitized_blocks',
+      'sanitized_documents'
     ])
   })
 

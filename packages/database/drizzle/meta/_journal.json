@@ -15,6 +15,20 @@
       "when": 1786558732525,
       "tag": "0001_slippery_the_liberteens",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786713579655,
+      "tag": "0002_breezy_sauron",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786719725674,
+      "tag": "0003_condemned_shard",
+      "breakpoints": true
     }
   ]
 }
