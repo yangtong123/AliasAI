@@ -8,6 +8,7 @@ import type {
 import { inspectDocumentSource } from '@aliasai/document'
 import { parseWorkerEvent, type ProcessDocumentRequest, type WorkerEvent, type WorkerTerminalEvent } from '@aliasai/python-bridge'
 import type { ApplicationKeys } from './index'
+import { documentSourcePathContext } from './index'
 
 export interface DocumentProcessor {
   readonly parserType: string
@@ -62,7 +63,7 @@ export class DocumentProcessingService {
       filePath = decrypt(
         source.sourcePathCipher,
         this.keys.persistenceKey,
-        Buffer.from(`${documentId}:document.sourcePath`)
+        documentSourcePathContext(documentId)
       ).toString('utf8')
     } catch (error) {
       throw new DocumentProcessingError('SOURCE_PATH_DECRYPTION_FAILED', 'Document source path could not be decrypted', {

@@ -14,6 +14,18 @@ export interface ApplicationKeys {
   readonly searchKey?: Buffer
 }
 
+export function matterNameContext(matterId: string): Buffer {
+  return Buffer.from(`${matterId}:matter.name`)
+}
+
+export function documentOriginalNameContext(documentId: string): Buffer {
+  return Buffer.from(`${documentId}:document.originalName`)
+}
+
+export function documentSourcePathContext(documentId: string): Buffer {
+  return Buffer.from(`${documentId}:document.sourcePath`)
+}
+
 export class MatterService {
   constructor(
     private readonly matters: MatterRepository,
@@ -27,7 +39,7 @@ export class MatterService {
     const id = generateUuidV7(timestamp)
     return this.matters.create({
       id,
-      nameCipher: encrypt(Buffer.from(name, 'utf8'), this.keys.persistenceKey, Buffer.from(`${id}:matter.name`)),
+      nameCipher: encrypt(Buffer.from(name, 'utf8'), this.keys.persistenceKey, matterNameContext(id)),
       status: 'ACTIVE',
       createdAt: timestamp,
       updatedAt: timestamp
@@ -52,12 +64,12 @@ export class DocumentImportService {
       originalNameCipher: encrypt(
         Buffer.from(source.originalName, 'utf8'),
         this.keys.persistenceKey,
-        Buffer.from(`${id}:document.originalName`)
+        documentOriginalNameContext(id)
       ),
       sourcePathCipher: encrypt(
         Buffer.from(source.sourcePath, 'utf8'),
         this.keys.persistenceKey,
-        Buffer.from(`${id}:document.sourcePath`)
+        documentSourcePathContext(id)
       ),
       fileHash: source.fileHash,
       mimeType: source.mimeType,
