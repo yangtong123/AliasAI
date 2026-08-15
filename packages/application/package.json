@@ -11,6 +11,8 @@
     "@aliasai/domain": "workspace:*",
     "@aliasai/entity-resolution": "workspace:*",
     "@aliasai/privacy-detection": "workspace:*",
-    "@aliasai/python-bridge": "workspace:*"
+    "@aliasai/pseudonymization": "workspace:*",
+    "@aliasai/python-bridge": "workspace:*",
+    "@aliasai/rehydration": "workspace:*"
   }
 }

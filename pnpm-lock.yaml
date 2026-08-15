@@ -92,9 +92,15 @@ importers:
       '@aliasai/privacy-detection':
         specifier: workspace:*
         version: link:../privacy-detection
+      '@aliasai/pseudonymization':
+        specifier: workspace:*
+        version: link:../pseudonymization
       '@aliasai/python-bridge':
         specifier: workspace:*
         version: link:../python-bridge
+      '@aliasai/rehydration':
+        specifier: workspace:*
+        version: link:../rehydration
 
   packages/crypto: {}
 
@@ -133,7 +139,11 @@ importers:
         specifier: workspace:*
         version: link:../domain
 
-  packages/pseudonymization: {}
+  packages/pseudonymization:
+    dependencies:
+      '@aliasai/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/python-bridge:
     dependencies:

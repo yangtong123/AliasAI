@@ -296,7 +296,9 @@ describe('EntityResolutionService', () => {
       alias: string
       is_primary: number
     }>
-    expect(aliasRows).toEqual([{ alias: `Person ${entityRow.public_token}`, is_primary: 1 }])
+    expect(aliasRows).toHaveLength(1)
+    expect(aliasRows[0]!.alias).toMatch(/^Person [A-Z0-9]+$/)
+    expect(aliasRows[0]!.is_primary).toBe(1)
     expect(aliasRows[0]!.alias).not.toContain('Synthetic Person Alpha')
 
     const mentionRows = query(
@@ -354,6 +356,25 @@ describe('EntityResolutionService', () => {
     })
     expect(payload).not.toContain('Synthetic Person Alpha')
     expect(query('SELECT COUNT(*) AS count FROM resolution_candidates')).toEqual([{ count: 0 }])
+  })
+
+  it('backfills a restoration token for a pre-existing tokenless ProtectedValue', async () => {
+    const { documentId, matterId } = seedParsedDocument(['Synthetic Person Alpha signed the agreement.'])
+    const entity = seedEntity(matterId, 'PERSON', 'Synthetic Holder')
+    linkEntityProtectedValue(matterId, entity.id, seedProtectedValue(matterId, 'PERSON_NAME', 'PERSON', 'Synthetic Person Alpha'))
+    await runDetection(documentId, detectorFor([{ type: 'PERSON', text: 'Synthetic Person Alpha' }]))
+
+    const before = query('SELECT public_token FROM protected_values WHERE matter_id = ?', matterId) as Array<{
+      public_token: string | null
+    }>
+    expect(before[0]!.public_token).toBeNull()
+
+    await makeService().resolve(documentId)
+
+    const after = query('SELECT public_token FROM protected_values WHERE matter_id = ?', matterId) as Array<{
+      public_token: string | null
+    }>
+    expect(after[0]!.public_token).toMatch(/^@N-[A-Z0-9]+$/)
   })
 
   it('auto-links an ID_CARD mention to the Entity sharing its ProtectedValue (hard Must-Link)', async () => {

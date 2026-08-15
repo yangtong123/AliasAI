@@ -4,7 +4,9 @@ import {
   deriveMatterSearchKey,
   encrypt,
   fingerprintNormalizedValue,
+  generateProtectedValueToken,
   generatePublicToken,
+  generateSyntheticAlias,
   generateUuidV7
 } from '@aliasai/crypto'
 import type {
@@ -176,6 +178,14 @@ export class EntityResolutionService {
       const workItems: MentionWorkItem[] = []
       const plannedProtectedValues = new Map<string, PlannedProtectedValue>()
       const documentFingerprints = new Map<ProtectedValueType, Set<string>>()
+      const protectedValueTokenBackfills: { readonly id: string; readonly publicToken: string }[] = []
+      const usedProtectedValueTokens = new Set<string>()
+      const nextProtectedValueToken = (type: ProtectedValueType): string => {
+        let token = generateProtectedValueToken(type)
+        while (usedProtectedValueTokens.has(token)) token = generateProtectedValueToken(type)
+        usedProtectedValueTokens.add(token)
+        return token
+      }
       for (const mention of begun.mentions) {
         let plaintextBytes: Buffer
         try {
@@ -243,10 +253,16 @@ export class EntityResolutionService {
                 type: protectedValueType,
                 valueCipher,
                 fingerprint,
+                publicToken: nextProtectedValueToken(protectedValueType),
                 restorePolicy: 'ALWAYS_RESTORE',
                 createdAt
               }
             }
+          } else if (existing.publicToken === undefined) {
+            // A value created before restoration tokens existed is reused but
+            // backfilled atomically so sanitization never fails closed on it.
+            protectedValueTokenBackfills.push({ id: existing.id, publicToken: nextProtectedValueToken(protectedValueType) })
+            protectedValue = { id: existing.id, existed: true }
           } else {
             protectedValue = { id: existing.id, existed: true }
           }
@@ -490,6 +506,7 @@ export class EntityResolutionService {
         protectedValues: [...plannedProtectedValues.values()].flatMap((planned) =>
           planned.input === undefined ? [] : [planned.input]
         ),
+        protectedValueTokenBackfills,
         entityProtectedValueLinks: links,
         mentionUpdates,
         candidates: candidates.map((candidate) =>
@@ -689,8 +706,12 @@ export class EntityResolutionService {
         id: this.generateId(this.now()),
         matterId,
         entityId,
-        // The primary alias is synthetic and never contains Mention plaintext.
-        alias: type === 'PERSON' ? `Person ${publicToken}` : `Organization ${publicToken}`,
+        // The primary alias is synthetic and readable: a Matter-scoped type label
+        // plus a 64-bit random suffix. It embeds neither the Public Token (an
+        // identity anchor) nor the internal Entity ID (which would leak a stable
+        // outbound identifier and its creation timestamp); the random suffix keeps
+        // it unique under the Matter-wide alias index.
+        alias: generateSyntheticAlias(type),
         aliasType: 'PRIMARY',
         isPrimary: true,
         createdAt
