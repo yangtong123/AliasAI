@@ -1,0 +1,158 @@
+import type { DocumentSummaryDTO } from '@aliasai/application'
+import { IpcValidationError, optionalBoolean, requireEnum, requireId, requireText } from './validate'
+import { toIpcResult, type IpcResult } from './errors'
+import type { AliasAiChannel, AliasAiInvokeMap } from './contract'
+import type { AliasAiRuntime } from '../runtime'
+
+/** Host capabilities the registry needs beyond the application services. */
+export interface HandlerHost {
+  /** Opens the OS file picker filtered to PDFs; returns null when cancelled. */
+  readonly pickPdf: () => Promise<string | null>
+}
+
+export type HandlerRegistry = {
+  readonly [K in AliasAiChannel]: (payload: unknown) => Promise<IpcResult<AliasAiInvokeMap[K]['response']>>
+}
+
+/**
+ * Pure channel registry: no Electron imports, so the whole IPC surface is
+ * unit-testable over a real in-memory service graph. Every handler validates
+ * its payload, runs the service, and funnels errors through toIpcResult.
+ */
+export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost): HandlerRegistry {
+  const { services } = runtime
+
+  const documentStatus = (documentId: string) => services.reviewQuery.getDocumentStatus(documentId)
+  const importedSummary = async (matterId: string, documentId: string): Promise<DocumentSummaryDTO> => {
+    const found = services.reviewQuery.listDocuments(matterId).find((document) => document.id === documentId)
+    if (found === undefined) throw new Error('imported document summary was not found')
+    return found
+  }
+
+  return {
+    'matter:list': (payload) =>
+      toIpcResult(() => {
+        requireEmpty(payload)
+        return services.reviewQuery.listMatters()
+      }),
+    'matter:create': (payload) =>
+      toIpcResult(() => {
+        const name = requireText(readField(payload, 'name'), 'name', 200)
+        const created = services.matters.create(name)
+        const summary = services.reviewQuery.listMatters().find((matter) => matter.id === created.id)
+        if (summary === undefined) throw new Error('created matter summary was not found')
+        return summary
+      }),
+    'dialog:pickPdf': (payload) =>
+      toIpcResult(async () => {
+        requireEmpty(payload)
+        return { filePath: await host.pickPdf() }
+      }),
+    'document:import': (payload) =>
+      toIpcResult(async () => {
+        const matterId = requireId(readField(payload, 'matterId'), 'matterId')
+        const filePath = requireId(readField(payload, 'filePath'), 'filePath')
+        const imported = await services.importDocs.importFromPath(matterId, filePath)
+        return importedSummary(matterId, imported.id)
+      }),
+    'document:list': (payload) =>
+      toIpcResult(() => {
+        const matterId = requireId(readField(payload, 'matterId'), 'matterId')
+        return services.reviewQuery.listDocuments(matterId)
+      }),
+    'document:get': (payload) =>
+      toIpcResult(() => {
+        const documentId = requireId(readField(payload, 'documentId'), 'documentId')
+        return documentStatus(documentId)
+      }),
+    'document:process': (payload) =>
+      toIpcResult(async () => {
+        const documentId = requireId(readField(payload, 'documentId'), 'documentId')
+        await services.processing.process(documentId)
+        return documentStatus(documentId)
+      }),
+    'document:detect': (payload) =>
+      toIpcResult(async () => {
+        const documentId = requireId(readField(payload, 'documentId'), 'documentId')
+        await services.detection.detect(documentId)
+        return documentStatus(documentId)
+      }),
+    'document:resolve': (payload) =>
+      toIpcResult(async () => {
+        const documentId = requireId(readField(payload, 'documentId'), 'documentId')
+        await services.resolution.resolve(documentId)
+        return documentStatus(documentId)
+      }),
+    'review:getDocument': (payload) =>
+      toIpcResult(() => {
+        const documentId = requireId(readField(payload, 'documentId'), 'documentId')
+        return services.reviewQuery.getDocumentReview(documentId)
+      }),
+    'review:assign': (payload) =>
+      toIpcResult(() => {
+        const mentionId = requireId(readField(payload, 'mentionId'), 'mentionId')
+        const entityId = requireId(readField(payload, 'entityId'), 'entityId')
+        return services.reviewOperations.assignToEntity(mentionId, entityId)
+      }),
+    'review:confirm': (payload) =>
+      toIpcResult(() => {
+        const mentionId = requireId(readField(payload, 'mentionId'), 'mentionId')
+        return services.reviewOperations.confirmMention(mentionId)
+      }),
+    'review:createEntityAndAssign': (payload) =>
+      toIpcResult(() => {
+        const mentionId = requireId(readField(payload, 'mentionId'), 'mentionId')
+        const primaryAlias = requireText(readField(payload, 'primaryAlias'), 'primaryAlias', 200)
+        const entityType = requireEnum(readField(payload, 'entityType'), ['PERSON', 'ORGANIZATION'], 'entityType')
+        return services.reviewOperations.createEntityAndAssign(mentionId, { primaryAlias, entityType })
+      }),
+    'review:addConstraint': (payload) =>
+      toIpcResult(() => {
+        const matterId = requireId(readField(payload, 'matterId'), 'matterId')
+        const entityAId = requireId(readField(payload, 'entityAId'), 'entityAId')
+        const entityBId = requireId(readField(payload, 'entityBId'), 'entityBId')
+        const type = requireEnum(readField(payload, 'type'), ['MUST_LINK', 'CANNOT_LINK'], 'type')
+        const reason = requireText(readField(payload, 'reason'), 'reason', 500)
+        return services.reviewOperations.markConstraint(matterId, entityAId, entityBId, type, reason)
+      }),
+    'preview:get': (payload) =>
+      toIpcResult(() => {
+        const documentId = requireId(readField(payload, 'documentId'), 'documentId')
+        return services.preview.getPreview(documentId)
+      }),
+    'preview:generate': (payload) =>
+      toIpcResult(async () => {
+        const documentId = requireId(readField(payload, 'documentId'), 'documentId')
+        return services.preview.generatePreview(documentId)
+      }),
+    'preview:rehydrate': (payload) =>
+      toIpcResult(() => {
+        const sanitizedDocumentId = requireId(readField(payload, 'sanitizedDocumentId'), 'sanitizedDocumentId')
+        const text = requireText(readField(payload, 'text'), 'text', 1_000_000)
+        const includeRestoreOnRequest = optionalBoolean(
+          readOptionalField(payload, 'includeRestoreOnRequest'),
+          'includeRestoreOnRequest',
+          false
+        )
+        return services.preview.rehydrateDemo({ sanitizedDocumentId, text, includeRestoreOnRequest })
+      })
+  }
+}
+
+function readField(payload: unknown, field: string): unknown {
+  if (typeof payload !== 'object' || payload === null) {
+    throw new IpcValidationError(field, `${field} is required`)
+  }
+  return (payload as Record<string, unknown>)[field]
+}
+
+function readOptionalField(payload: unknown, field: string): unknown {
+  if (typeof payload !== 'object' || payload === null) return undefined
+  return (payload as Record<string, unknown>)[field]
+}
+
+function requireEmpty(payload: unknown): void {
+  if (payload === undefined || payload === null) return
+  if (typeof payload === 'object' && Object.keys(payload).length === 0) return
+  throw new IpcValidationError('payload', 'payload must be empty')
+}

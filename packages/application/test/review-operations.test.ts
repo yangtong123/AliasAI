@@ -126,7 +126,7 @@ describe('ReviewOperationService', () => {
       )
       .run()
 
-    const constraint = operations.markCannotLink('matter-1', 'entity-1', 'entity-2', 'Different people')
+    const constraint = operations.markConstraint('matter-1', 'entity-1', 'entity-2', 'CANNOT_LINK', 'Different people')
 
     expect(constraint).toMatchObject({ type: 'CANNOT_LINK', reason: 'Different people' })
     // The stored pair is canonicalized to sorted order.

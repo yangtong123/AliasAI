@@ -171,6 +171,26 @@ export class ReviewQueryService {
     return this.review.listDocumentsByMatter(matterId).map((item) => this.toDocumentSummary(item))
   }
 
+  /** Light status read for polling: document summary plus the latest job per type. */
+  getDocumentStatus(documentId: string): { document: DocumentSummaryDTO; jobs: readonly JobSummaryDTO[] } {
+    const documentRow = this.documents.findById(documentId)
+    if (documentRow === undefined) {
+      throw new ReviewQueryError('DOCUMENT_NOT_FOUND', 'Document was not found')
+    }
+    const listItem = this.review
+      .listDocumentsByMatter(documentRow.matterId)
+      .find((item) => item.document.id === documentId)
+    if (listItem === undefined) {
+      throw new ReviewQueryError('DOCUMENT_NOT_FOUND', 'Document was not found')
+    }
+    return {
+      document: this.toDocumentSummary(listItem),
+      jobs: this.review
+        .findLatestJobs(documentId)
+        .map((job) => ({ type: job.type, status: job.status, progress: job.progress, createdAt: job.createdAt }))
+    }
+  }
+
   getDocumentReview(documentId: string): DocumentReviewDTO {
     const documentRow = this.documents.findById(documentId)
     if (documentRow === undefined) {

@@ -70,8 +70,14 @@ export class ReviewOperationService {
     return { mention: refreshed, entity }
   }
 
-  markCannotLink(matterId: string, entityAId: string, entityBId: string, reason: string): ConstraintDTO {
-    const constraint = this.resolution.addConstraint(matterId, entityAId, entityBId, 'CANNOT_LINK', reason)
+  markConstraint(
+    matterId: string,
+    entityAId: string,
+    entityBId: string,
+    type: 'MUST_LINK' | 'CANNOT_LINK',
+    reason: string
+  ): ConstraintDTO {
+    const constraint = this.resolution.addConstraint(matterId, entityAId, entityBId, type, reason)
     return {
       id: constraint.id,
       entityAId: constraint.entityAId,
