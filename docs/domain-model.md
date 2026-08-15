@@ -117,6 +117,34 @@ Cannot-Link constraints are application operations that append `MENTION_ASSIGNED
 `MENTION_REASSIGNED`, or `CONSTRAINT_CREATED` ResolutionEvents in the same
 transaction as the mutation.
 
+Pseudonymization completes the local pipeline:
+
+```text
+READY -> SANITIZING -> SANITIZED
+                    `-> FAILED -> SANITIZING
+```
+
+Sanitization decrypts each Block transiently in reading order and replaces every
+Mention range with `Alias〔@Token〕`, working strictly from
+Mention -> Entity -> Primary Alias + ProtectedValue restoration token — never raw
+string replacement. The restoration token is value-level and Matter-scoped: each
+ProtectedValue of an Entity (name, ID card, email, bank account) carries its own
+token, so one Entity holds several distinct restoration anchors under different
+policies. The workflow is fail-closed: an unresolved, overlapping, out-of-range,
+or tokenless Mention aborts the run and finalizes the job as `FAILED`, so no
+sendable artifact can be produced from partially resolved input. The sanitized
+Block texts are persisted encrypted; the Mapping Vault records, per Mention, only
+non-sensitive replacement metadata (restoration token, alias used, effective
+restore policy). The effective restore policy is type-level: names and addresses
+`ALWAYS_RESTORE`, phone/email/ID card `RESTORE_ON_REQUEST`, bank account
+`NEVER_RESTORE`. A `SANITIZED` Document's artifact is immutable and reused
+idempotently.
+
+Rehydration is a local read-only operation over the Mapping Vault: the value-level
+restoration token is the lookup anchor, aliases only identify the wrapped span,
+values below the caller's requested policy level stay pseudonymized, and unknown
+or tampered tokens remain verbatim and are reported for manual review.
+
 ## DocumentPage
 
 One logical page in a Document.
@@ -277,7 +305,8 @@ interface EntityAlias {
 Rules:
 
 - Alias may change over time.
-- Public Token is the restoration anchor, not Alias.
+- The Entity Public Token is the identity anchor, not Alias; rehydration anchors
+  on the ProtectedValue restoration token instead.
 - Aliases must be unique inside a Matter.
 
 ## ProtectedValue
@@ -492,13 +521,13 @@ E2.mergedIntoEntityId = E1
 AI text:
 
 ```text
-原告甲〔@P-X7M2K9〕应进一步证明签约权限。
+原告甲〔@N-X7M2K9F3〕应进一步证明签约权限。
 ```
 
 Resolution:
 
 ```text
-@P-X7M2K9 -> E1 -> primary PERSON_NAME -> 张伟
+@N-X7M2K9F3 -> Mapping Vault -> PERSON_NAME ProtectedValue -> 张伟
 ```
 
 Restored text:

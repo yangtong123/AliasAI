@@ -6,10 +6,10 @@ AliasAI protects sensitive local documents before they are sent to external AI s
 
 Instead of only redacting data, AliasAI creates stable Matter-scoped pseudonyms and public tokens, for example:
 
-- `张伟` -> `原告甲〔@P-8K3F7A〕`
-- `深圳星河科技有限公司` -> `A公司〔@O-Q92KD8〕`
+- `张伟` -> `原告甲〔@N-8K3F7A2B〕` (the value-level restoration token)
+- `深圳星河科技有限公司` -> `A公司〔@G-Q92KD8F1〕`
 
-AI operates on the pseudonymized representation. Returned AI content is rehydrated locally using the stable Public Token and Mapping Vault.
+AI operates on the pseudonymized representation. Returned AI content is rehydrated locally using the value-level restoration token and Mapping Vault; the Entity token (`@P-...`/`@O-...`) is only an identity anchor.
 
 ## V1 Runtime Architecture
 
@@ -144,6 +144,21 @@ Native PDF Worker -> encrypted Document Blocks -> PrivacyDetector
 OCR and NER can implement the existing parser/detector ports later without changing
 the persistence workflow.
 
+The sanitization path continues:
+
+```text
+READY Document -> PseudonymizationService (fail-closed per Block)
+              -> encrypted Sanitized Blocks + Mapping Vault -> SQLite
+Mapping Vault  -> RehydrationService (Public Token anchored, policy-filtered)
+              -> local real-identity text
+```
+
+Pseudonymization is fail-closed: any Mention without a resolved Entity and a
+restoration token aborts the SANITIZE job, so no sendable artifact can be produced
+from partially resolved input. The Mapping Vault stores only pseudonym metadata
+(restoration token, alias, effective restore policy); real values stay encrypted
+and are resolved lazily during local rehydration.
+
 ## Key Architectural Decisions
 
 ### Matter is the privacy boundary
@@ -154,17 +169,23 @@ All Entities and mappings are scoped to one Matter. The same real person in two 
 
 A Mention means a sensitive occurrence in a document. An Entity means a real-world subject. Multiple Mentions may resolve to one Entity.
 
-### Public Token and Alias are separate
+### Public Token, restoration token, and Alias are separate
 
-- Public Token: stable restoration identity, immutable, machine-oriented.
+- Entity Public Token: stable Matter-scoped, immutable Entity identity.
+- Restoration token: value-level Matter-scoped, immutable. Each ProtectedValue of
+  an Entity (name, ID card, email, bank account) carries its own token, so one
+  Entity restores several distinct values under distinct policies. Rehydration
+  anchors on this value-level token, not the Entity Public Token.
 - Alias: human-readable label for AI reasoning, mutable.
 
 Example:
 
 ```text
 Entity ID: 019c...
-Public Token: @P-8K3F7A
+Entity Public Token: @P-8K3F7A
 Primary Alias: 原告甲
+Name restoration token: @N-…
+ID-card restoration token: @I-…
 ```
 
 ### Parser/OCR is infrastructure
@@ -237,9 +258,9 @@ PDF
 -> Block
 -> Mention
 -> Entity
--> 原告甲〔@P001〕
+-> 原告甲〔@N-F4A21C9E〕
 -> AI
--> @P001
+-> @N-F4A21C9E
 -> 张伟
 ```
 

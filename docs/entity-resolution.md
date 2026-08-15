@@ -467,8 +467,10 @@ The implemented V1 workflow deliberately covers only the deterministic core:
   reserved for EXPLICIT or PARTIAL PERSON/ORGANIZATION Mentions with zero eligible
   candidates; identifier and metadata Mentions fall to UNRESOLVED instead.
 - **Auto-created Entities** receive a random Public Token and a synthetic primary
-  alias derived from the token (never the Mention plaintext, because
-  `entity_aliases.alias` is a plaintext Matter-unique column).
+  alias of the form `Person <random>` / `Organization <random>`. The alias embeds
+  neither the Mention plaintext, nor the Entity Public Token, nor the internal
+  Entity ID: `entity_aliases.alias` is a plaintext Matter-unique column, and the
+  Entity Public Token is an identity anchor that must never appear inside the alias.
 
 Context extraction, OCR-aware similarity, role/relationship features, and the V2
 model path remain unimplemented.

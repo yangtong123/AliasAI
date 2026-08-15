@@ -204,15 +204,19 @@ WHERE is_primary = 1;
 | value_type | TEXT | NOT NULL |
 | value_cipher | BLOB | NOT NULL |
 | fingerprint | BLOB | NOT NULL |
-| public_token | TEXT | nullable |
+| public_token | TEXT | nullable (backfilled lazily), format `@[A-Z]-[A-Z0-9]+` |
 | restore_policy | TEXT | NOT NULL |
 | created_at | INTEGER | NOT NULL |
 
-Unique: `(matter_id, value_type, fingerprint)`.
+Unique: `(matter_id, value_type, fingerprint)`, `(matter_id, public_token)` where `public_token` is not null.
 
 Index:
 
 - `idx_protected_values_lookup(matter_id, value_type, fingerprint)`
+
+`public_token` is the value-level restoration token. It is immutable after it is set
+(a trigger blocks mutation), and a second trigger validates its format on insert and
+update.
 
 Fingerprint definition:
 
@@ -329,6 +333,81 @@ Indexes:
 - `idx_resolution_events_matter_time(matter_id, created_at)`
 - `idx_resolution_events_entity(entity_id)`
 - `idx_resolution_events_mention(mention_id)`
+
+### sanitized_documents
+
+One immutable sanitized artifact per Document.
+
+| Column | Type | Constraints |
+|---|---|---|
+| id | TEXT | PK |
+| matter_id | TEXT | FK matters(id), NOT NULL |
+| document_id | TEXT | FK documents(id), NOT NULL |
+| job_id | TEXT | FK processing_jobs(id), NOT NULL |
+| created_at | INTEGER | NOT NULL |
+
+Unique: `(document_id)`.
+
+Index:
+
+- `idx_sanitized_documents_matter(matter_id)`
+
+A scope trigger enforces that `matter_id` equals the Document's Matter and that
+`job_id` is a `SANITIZE` job belonging to the same Document.
+
+### sanitized_blocks
+
+Encrypted sanitized text per source Block. Append-only at the SQLite boundary.
+
+| Column | Type | Constraints |
+|---|---|---|
+| id | TEXT | PK |
+| sanitized_document_id | TEXT | FK sanitized_documents(id), NOT NULL |
+| document_id | TEXT | FK documents(id), NOT NULL |
+| page_id | TEXT | FK document_pages(id), NOT NULL |
+| block_id | TEXT | FK document_blocks(id), NOT NULL |
+| text_cipher | BLOB | NOT NULL |
+| created_at | INTEGER | NOT NULL |
+
+Unique: `(sanitized_document_id, block_id)`.
+
+Index:
+
+- `idx_sanitized_blocks_document(sanitized_document_id)`
+
+Sanitized text uses the authenticated encryption context
+`<sanitized-block-id>:sanitizedBlock.text`. A scope trigger enforces that the
+referenced Block/Page hierarchy belongs to the parent sanitized Document.
+
+### sanitization_mappings
+
+The Mapping Vault: per-Mention replacement metadata for one sanitized Document.
+Append-only. Contains no plaintext protected values — only the pseudonyms that
+are safe to send.
+
+| Column | Type | Constraints |
+|---|---|---|
+| id | TEXT | PK |
+| matter_id | TEXT | FK matters(id), NOT NULL |
+| sanitized_document_id | TEXT | FK sanitized_documents(id), NOT NULL |
+| mention_id | TEXT | FK mentions(id), NOT NULL |
+| entity_id | TEXT | FK entities(id), NOT NULL |
+| public_token | TEXT | NOT NULL |
+| alias | TEXT | NOT NULL |
+| restore_policy | TEXT | NOT NULL, CHECK IN ('ALWAYS_RESTORE','RESTORE_ON_REQUEST','NEVER_RESTORE') |
+| created_at | INTEGER | NOT NULL |
+
+Unique: `(sanitized_document_id, mention_id)`.
+
+Index:
+
+- `idx_sanitization_mappings_matter_token(matter_id, public_token)`
+
+A scope trigger enforces that Mention and Entity belong to the mapping Matter and
+that the Mention belongs to the parent sanitized Document. `public_token` is the
+ProtectedValue's value-level restoration token (one per value type of an Entity),
+not the Entity's Public Token. Rehydration resolves the real value lazily from the
+ProtectedValue ciphertext; the vault stores no plaintext.
 
 ### processing_jobs
 

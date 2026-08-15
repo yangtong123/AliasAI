@@ -25,11 +25,11 @@ Install the Python parser and test dependencies with `python3 -m pip install -e 
 - `packages/document`: non-destructive local source inspection and SHA-256 file fingerprints.
 - `packages/privacy-detection`: pluggable, plaintext-free location proposals with deterministic high-precision V1 rules.
 - `packages/entity-resolution`: type-specific value normalization, deterministic `er-v1` evidence scoring, and an explainable rule-first proposal gate; it never applies identity mutations.
-- `packages/pseudonymization`: offset-based sanitized text formatting without raw global replacement.
+- `packages/pseudonymization`: offset-based sanitized text formatting without raw global replacement, plus type-level default restore policies.
 - `packages/rehydration`: Public Token-anchored local restoration.
 - `packages/ai`: reserved sanitized provider boundary; no provider integration exists yet.
 - `packages/python-bridge`: validated JSON Lines Protocol v1 client with mock and native-PDF worker contract tests.
-- `packages/application`: encrypted Matter/document workflows, engine-independent Document processing, transactional Privacy Detection, Entity Resolution with ProtectedValue fingerprints, and atomic Entity creation orchestration.
+- `packages/application`: encrypted Matter/document workflows, engine-independent Document processing, transactional Privacy Detection, Entity Resolution with ProtectedValue fingerprints, fail-closed Pseudonymization with an encrypted Mapping Vault, and policy-filtered local Rehydration.
 - `python/document_parser`: native PDF text extraction plus a protocol mock; parser output contains pages and normalized text blocks only.
 - `python/ocr`, `python/ner`, `python/image_processing`: replaceable package boundaries; no OCR or ML implementation exists yet.
 
