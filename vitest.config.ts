@@ -1,10 +1,25 @@
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
+  coverage: {
+    enabled: false
+  },
   test: {
-    include: ['packages/**/*.test.ts'],
-    coverage: {
-      enabled: false
-    }
+    projects: [
+      {
+        test: {
+          name: 'node',
+          environment: 'node',
+          include: ['packages/**/*.test.ts', 'apps/desktop/main/**/*.test.ts', 'apps/desktop/preload/**/*.test.ts']
+        }
+      },
+      {
+        test: {
+          name: 'renderer',
+          environment: 'jsdom',
+          include: ['apps/desktop/renderer/**/*.test.tsx', 'apps/desktop/renderer/**/*.test.ts']
+        }
+      }
+    ]
   }
 })

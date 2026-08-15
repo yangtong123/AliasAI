@@ -35,6 +35,30 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@aliasai/application':
+        specifier: workspace:*
+        version: link:../../packages/application
+      '@aliasai/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+      '@aliasai/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@aliasai/document':
+        specifier: workspace:*
+        version: link:../../packages/document
+      '@aliasai/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@aliasai/entity-resolution':
+        specifier: workspace:*
+        version: link:../../packages/entity-resolution
+      '@aliasai/privacy-detection':
+        specifier: workspace:*
+        version: link:../../packages/privacy-detection
+      '@aliasai/python-bridge':
+        specifier: workspace:*
+        version: link:../../packages/python-bridge
       '@vitejs/plugin-react':
         specifier: ^5.0.2
         version: 5.2.0(vite@7.3.6(@types/node@24.13.3)(tsx@4.23.12))

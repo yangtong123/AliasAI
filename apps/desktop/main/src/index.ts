@@ -1,6 +1,7 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog, safeStorage } from 'electron'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { initializeRuntime } from './runtime'
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
 const rendererUrl = parseRendererUrl(process.env.ALIASAI_RENDERER_URL)
@@ -61,7 +62,18 @@ function createWindow(): BrowserWindow {
   return window
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  try {
+    // Keys and the database must exist before any renderer or IPC handler.
+    await initializeRuntime(app, safeStorage)
+  } catch (error) {
+    // Sanitized message: never surfaces paths, keys, or stack traces.
+    const message = error instanceof Error ? error.message : 'Unknown startup failure'
+    dialog.showErrorBox('AliasAI', message)
+    app.quit()
+    return
+  }
+
   createWindow()
 
   app.on('activate', () => {
