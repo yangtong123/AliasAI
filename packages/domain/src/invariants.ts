@@ -9,7 +9,10 @@ import type {
   Mention,
   NormalizedBBox,
   ProcessingJob,
-  ProtectedValue
+  ProtectedValue,
+  SanitizationMapping,
+  SanitizedBlock,
+  SanitizedDocument
 } from './types'
 
 /** Raised when an object would violate a documented AliasAI domain rule. */
@@ -214,6 +217,39 @@ export function assertProtectedValue(value: ProtectedValue): void {
   requireIdentifier(value.matterId, 'protectedValue.matterId')
   if (value.publicToken !== undefined) requireIdentifier(value.publicToken, 'protectedValue.publicToken')
   requireNonNegativeInteger(value.createdAt, 'protectedValue.createdAt')
+}
+
+export function assertSanitizedDocument(value: SanitizedDocument): void {
+  requireIdentifier(value.id, 'sanitizedDocument.id')
+  requireIdentifier(value.matterId, 'sanitizedDocument.matterId')
+  requireIdentifier(value.documentId, 'sanitizedDocument.documentId')
+  requireIdentifier(value.jobId, 'sanitizedDocument.jobId')
+  requireNonNegativeInteger(value.createdAt, 'sanitizedDocument.createdAt')
+}
+
+export function assertSanitizedBlock(value: SanitizedBlock): void {
+  requireIdentifier(value.id, 'sanitizedBlock.id')
+  requireIdentifier(value.sanitizedDocumentId, 'sanitizedBlock.sanitizedDocumentId')
+  requireIdentifier(value.documentId, 'sanitizedBlock.documentId')
+  requireIdentifier(value.pageId, 'sanitizedBlock.pageId')
+  requireIdentifier(value.blockId, 'sanitizedBlock.blockId')
+  requireNonNegativeInteger(value.createdAt, 'sanitizedBlock.createdAt')
+}
+
+const RESTORE_POLICIES = new Set(['ALWAYS_RESTORE', 'RESTORE_ON_REQUEST', 'NEVER_RESTORE'])
+
+export function assertSanitizationMapping(value: SanitizationMapping): void {
+  requireIdentifier(value.id, 'sanitizationMapping.id')
+  requireIdentifier(value.matterId, 'sanitizationMapping.matterId')
+  requireIdentifier(value.sanitizedDocumentId, 'sanitizationMapping.sanitizedDocumentId')
+  requireIdentifier(value.mentionId, 'sanitizationMapping.mentionId')
+  requireIdentifier(value.entityId, 'sanitizationMapping.entityId')
+  requireIdentifier(value.publicToken, 'sanitizationMapping.publicToken')
+  requireIdentifier(value.alias, 'sanitizationMapping.alias')
+  if (!RESTORE_POLICIES.has(value.restorePolicy)) {
+    throw new DomainInvariantError('sanitizationMapping.restorePolicy is not supported')
+  }
+  requireNonNegativeInteger(value.createdAt, 'sanitizationMapping.createdAt')
 }
 
 export function assertEntityRelationship(relationship: EntityRelationship): void {

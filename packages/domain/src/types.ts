@@ -22,6 +22,7 @@ export type DocumentParseStatus =
   | 'DETECTED'
   | 'RESOLVING'
   | 'READY'
+  | 'SANITIZING'
   | 'SANITIZED'
   | 'FAILED'
 
@@ -38,6 +39,32 @@ export interface Document {
 }
 
 export type PageSourceType = 'NATIVE' | 'RASTER' | 'MIXED'
+
+/**
+ * Pseudonymized projection of a Document produced by a SANITIZE job.
+ * Sanitized text itself is persisted elsewhere; this record only anchors the
+ * Matter, source Document, and producing job.
+ */
+export interface SanitizedDocument {
+  readonly id: string
+  readonly matterId: string
+  readonly documentId: string
+  readonly jobId: string
+  readonly createdAt: number
+}
+
+/**
+ * Pseudonymized projection of a DocumentBlock. Intentionally carries no text:
+ * sanitized content is an encrypted persistence concern owned by later packages.
+ */
+export interface SanitizedBlock {
+  readonly id: string
+  readonly sanitizedDocumentId: string
+  readonly documentId: string
+  readonly pageId: string
+  readonly blockId: string
+  readonly createdAt: number
+}
 
 export interface DocumentPage {
   readonly id: string
@@ -115,7 +142,7 @@ export interface Entity {
   readonly id: string
   readonly matterId: string
   readonly type: EntityType
-  /** Matter-scoped, stable restoration anchor. Never derived from identity data. */
+  /** Matter-scoped, stable Entity identity anchor. Never derived from identity data. */
   readonly publicToken: string
   readonly status: EntityStatus
   readonly mergedIntoEntityId?: string
@@ -153,6 +180,24 @@ export interface ProtectedValue {
   readonly matterId: string
   readonly type: ProtectedValueType
   readonly publicToken?: string
+  readonly restorePolicy: RestorePolicy
+  readonly createdAt: number
+}
+
+/**
+ * Maps one Mention within a SanitizedDocument to its Entity, the value-level
+ * restoration token used as the rehydration anchor, and the human-readable Alias
+ * at sanitization time. Sensitive plaintext and encrypted persistence fields
+ * intentionally do not belong here.
+ */
+export interface SanitizationMapping {
+  readonly id: string
+  readonly matterId: string
+  readonly sanitizedDocumentId: string
+  readonly mentionId: string
+  readonly entityId: string
+  readonly publicToken: string
+  readonly alias: string
   readonly restorePolicy: RestorePolicy
   readonly createdAt: number
 }

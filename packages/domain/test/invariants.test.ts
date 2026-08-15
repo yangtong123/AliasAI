@@ -1,17 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import {
   DomainInvariantError,
+  assertDocument,
   assertDocumentBlock,
   assertEntity,
   assertMention,
   assertProcessingJob,
   assertPublicTokenUnchanged,
+  assertSanitizationMapping,
+  assertSanitizedBlock,
+  assertSanitizedDocument,
   assignMentionToEntity,
   canonicalizeEntityConstraint,
   canonicalizeEntityPair,
   mergeEntity
 } from '../src/index'
-import type { Entity, Mention } from '../src/index'
+import type { Document, Entity, Mention, SanitizationMapping, SanitizedBlock, SanitizedDocument } from '../src/index'
 
 const activeEntity: Entity = {
   id: 'entity-a',
@@ -36,6 +40,45 @@ const mention: Mention = {
   detector: 'USER',
   confidence: 1,
   reviewStatus: 'CONFIRMED',
+  createdAt: 1
+}
+
+const document: Document = {
+  id: 'document-1',
+  matterId: 'matter-1',
+  fileHash: 'hash-1',
+  mimeType: 'application/pdf',
+  parseStatus: 'IMPORTED',
+  createdAt: 1,
+  updatedAt: 1
+}
+
+const sanitizedDocument: SanitizedDocument = {
+  id: 'sanitized-document-1',
+  matterId: 'matter-1',
+  documentId: 'document-1',
+  jobId: 'job-1',
+  createdAt: 1
+}
+
+const sanitizedBlock: SanitizedBlock = {
+  id: 'sanitized-block-1',
+  sanitizedDocumentId: 'sanitized-document-1',
+  documentId: 'document-1',
+  pageId: 'page-1',
+  blockId: 'block-1',
+  createdAt: 1
+}
+
+const sanitizationMapping: SanitizationMapping = {
+  id: 'mapping-1',
+  matterId: 'matter-1',
+  sanitizedDocumentId: 'sanitized-document-1',
+  mentionId: 'mention-1',
+  entityId: 'entity-a',
+  publicToken: '@P-8K3F7A',
+  alias: '原告甲',
+  restorePolicy: 'ALWAYS_RESTORE',
   createdAt: 1
 }
 
@@ -184,5 +227,84 @@ describe('domain invariants', () => {
       })
     ).toMatchObject({ entityAId: 'entity-a', entityBId: 'entity-z' })
     expect(() => canonicalizeEntityPair('entity-a', 'entity-a')).toThrow(DomainInvariantError)
+  })
+
+  it('accepts the SANITIZING document parse status', () => {
+    expect(() => assertDocument({ ...document, parseStatus: 'SANITIZING' })).not.toThrow()
+  })
+
+  it('accepts a valid SanitizedDocument and rejects empty identifiers', () => {
+    expect(() => assertSanitizedDocument(sanitizedDocument)).not.toThrow()
+    expect(() => assertSanitizedDocument({ ...sanitizedDocument, id: ' ' })).toThrow(
+      'sanitizedDocument.id must not be empty'
+    )
+    expect(() => assertSanitizedDocument({ ...sanitizedDocument, matterId: '' })).toThrow(
+      'sanitizedDocument.matterId must not be empty'
+    )
+    expect(() => assertSanitizedDocument({ ...sanitizedDocument, documentId: '' })).toThrow(
+      'sanitizedDocument.documentId must not be empty'
+    )
+    expect(() => assertSanitizedDocument({ ...sanitizedDocument, jobId: '' })).toThrow(
+      'sanitizedDocument.jobId must not be empty'
+    )
+    expect(() => assertSanitizedDocument({ ...sanitizedDocument, createdAt: -1 })).toThrow(
+      'sanitizedDocument.createdAt must be a non-negative safe integer'
+    )
+  })
+
+  it('accepts a valid SanitizedBlock and rejects empty identifiers', () => {
+    expect(() => assertSanitizedBlock(sanitizedBlock)).not.toThrow()
+    expect(() => assertSanitizedBlock({ ...sanitizedBlock, id: '' })).toThrow(
+      'sanitizedBlock.id must not be empty'
+    )
+    expect(() => assertSanitizedBlock({ ...sanitizedBlock, sanitizedDocumentId: '' })).toThrow(
+      'sanitizedBlock.sanitizedDocumentId must not be empty'
+    )
+    expect(() => assertSanitizedBlock({ ...sanitizedBlock, documentId: '' })).toThrow(
+      'sanitizedBlock.documentId must not be empty'
+    )
+    expect(() => assertSanitizedBlock({ ...sanitizedBlock, pageId: '' })).toThrow(
+      'sanitizedBlock.pageId must not be empty'
+    )
+    expect(() => assertSanitizedBlock({ ...sanitizedBlock, blockId: '' })).toThrow(
+      'sanitizedBlock.blockId must not be empty'
+    )
+    expect(() => assertSanitizedBlock({ ...sanitizedBlock, createdAt: 0.5 })).toThrow(
+      'sanitizedBlock.createdAt must be a non-negative safe integer'
+    )
+  })
+
+  it('accepts a valid SanitizationMapping and rejects each violated rule', () => {
+    expect(() => assertSanitizationMapping(sanitizationMapping)).not.toThrow()
+    expect(() => assertSanitizationMapping({ ...sanitizationMapping, id: '' })).toThrow(
+      'sanitizationMapping.id must not be empty'
+    )
+    expect(() => assertSanitizationMapping({ ...sanitizationMapping, matterId: '' })).toThrow(
+      'sanitizationMapping.matterId must not be empty'
+    )
+    expect(() => assertSanitizationMapping({ ...sanitizationMapping, sanitizedDocumentId: '' })).toThrow(
+      'sanitizationMapping.sanitizedDocumentId must not be empty'
+    )
+    expect(() => assertSanitizationMapping({ ...sanitizationMapping, mentionId: '' })).toThrow(
+      'sanitizationMapping.mentionId must not be empty'
+    )
+    expect(() => assertSanitizationMapping({ ...sanitizationMapping, entityId: '' })).toThrow(
+      'sanitizationMapping.entityId must not be empty'
+    )
+    expect(() => assertSanitizationMapping({ ...sanitizationMapping, publicToken: '  ' })).toThrow(
+      'sanitizationMapping.publicToken must not be empty'
+    )
+    expect(() => assertSanitizationMapping({ ...sanitizationMapping, alias: '  ' })).toThrow(
+      'sanitizationMapping.alias must not be empty'
+    )
+    expect(() =>
+      assertSanitizationMapping({
+        ...sanitizationMapping,
+        restorePolicy: 'SOMETIMES' as SanitizationMapping['restorePolicy']
+      })
+    ).toThrow('sanitizationMapping.restorePolicy is not supported')
+    expect(() => assertSanitizationMapping({ ...sanitizationMapping, createdAt: -1 })).toThrow(
+      'sanitizationMapping.createdAt must be a non-negative safe integer'
+    )
   })
 })
