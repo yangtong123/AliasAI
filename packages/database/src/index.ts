@@ -1,3 +1,4 @@
 export * from './client'
 export * from './repositories'
+export * from './review-queries'
 export * from './schema'

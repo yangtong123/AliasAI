@@ -675,7 +675,8 @@ function toMentionInsert(input: CreateMentionInput): typeof mentions.$inferInser
   }
 }
 
-function toMention(row: MentionRow): Mention {
+/** Maps a mention row to its domain shape; shared with the review read model. */
+export function toMention(row: MentionRow): Mention {
   const mention: Mention = {
     id: row.id,
     matterId: row.matterId,
@@ -700,7 +701,8 @@ function toMention(row: MentionRow): Mention {
   return mention
 }
 
-function toProcessingJob(row: ProcessingJobRow): ProcessingJob {
+/** Maps a processing job row to its domain shape; shared with the review read model. */
+export function toProcessingJob(row: ProcessingJobRow): ProcessingJob {
   const job: ProcessingJob = {
     id: row.id,
     documentId: row.documentId,
