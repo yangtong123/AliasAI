@@ -24,6 +24,7 @@ import {
   processingJobs,
   protectedValues,
   resolutionCandidates,
+  resolutionEvents,
   resolutionEvidence
 } from './schema'
 
@@ -262,5 +263,29 @@ export class ReviewQueryRepository {
     const mention = toMention(row)
     assertMention(mention)
     return { ...mention, textCipher: row.textCipher }
+  }
+
+  /**
+   * The actor of the latest assignment event per mention ('SYSTEM' | 'USER'),
+   * distinguishing auto-links from user decisions in the review read model.
+   */
+  findLatestAssignmentActors(mentionIds: readonly string[]): ReadonlyMap<string, 'SYSTEM' | 'USER'> {
+    if (mentionIds.length === 0) return new Map()
+    const rows = this.db
+      .select({ mentionId: resolutionEvents.mentionId, actor: resolutionEvents.actor, createdAt: resolutionEvents.createdAt, id: resolutionEvents.id })
+      .from(resolutionEvents)
+      .where(
+        and(
+          inArray(resolutionEvents.mentionId, [...mentionIds]),
+          inArray(resolutionEvents.eventType, ['MENTION_ASSIGNED', 'MENTION_REASSIGNED'])
+        )
+      )
+      .orderBy(desc(resolutionEvents.createdAt), desc(resolutionEvents.id))
+      .all()
+    const actorByMention = new Map<string, 'SYSTEM' | 'USER'>()
+    for (const row of rows) {
+      if (row.mentionId !== null && !actorByMention.has(row.mentionId)) actorByMention.set(row.mentionId, row.actor)
+    }
+    return actorByMention
   }
 }
