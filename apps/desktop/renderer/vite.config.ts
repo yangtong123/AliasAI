@@ -30,6 +30,11 @@ export default defineConfig(({ command }) => ({
   root: currentDirectory,
   plugins: [react(), contentSecurityPolicy(command)],
   base: './',
+  // Bind IPv4 explicitly: the dev script waits on http://127.0.0.1:5173, and
+  // Vite's default `localhost` binding can resolve to IPv6-only on some hosts.
+  server: {
+    host: '127.0.0.1'
+  },
   build: {
     outDir: '../dist/renderer',
     emptyOutDir: true

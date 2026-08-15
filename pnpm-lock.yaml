@@ -74,6 +74,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^5.0.2
         version: 5.2.0(vite@7.3.6(@types/node@24.13.3)(tsx@4.23.12))
+      better-sqlite3:
+        specifier: 13.0.3
+        version: 13.0.3
       electron:
         specifier: ^43.4.0
         version: 43.4.0
@@ -99,6 +102,9 @@ importers:
       cross-env:
         specifier: ^7.0.3
         version: 7.0.3
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
       tsx:
         specifier: ^4.20.4
         version: 4.23.12
