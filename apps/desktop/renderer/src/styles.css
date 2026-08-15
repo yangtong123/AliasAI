@@ -9,9 +9,9 @@ body {
 }
 
 main {
-  max-width: 720px;
-  margin: 12vh auto;
-  padding: 0 32px;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px 32px;
 }
 
 .eyebrow {
@@ -23,6 +23,208 @@ main {
 }
 
 h1 {
-  margin: 0;
-  font-size: 3rem;
+  margin: 0 0 16px;
+  font-size: 2rem;
+}
+
+h2,
+h3,
+h4 {
+  margin: 8px 0;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+aside {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+ul {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+}
+
+button {
+  color: #e8edf7;
+  background: #1d2a3d;
+  border: 1px solid #33455f;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #27395a;
+}
+
+button.selected {
+  border-color: #6ea8ff;
+  outline: 1px solid #6ea8ff;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+input,
+select,
+textarea {
+  color: #e8edf7;
+  background: #16202f;
+  border: 1px solid #33455f;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  border: 1px solid #33455f;
+  color: #8ba6c9;
+}
+
+.badge.status-ready,
+.badge.status-sanitized {
+  border-color: #3f8f6b;
+  color: #7fd6a8;
+}
+
+.badge.status-failed {
+  border-color: #b3564d;
+  color: #ff9b8f;
+}
+
+.empty {
+  color: #8ba6c9;
+}
+
+.error {
+  color: #ff9b8f;
+}
+
+.warning {
+  color: #ffcc7a;
+}
+
+.review-layout {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: 24px;
+}
+
+.block {
+  border: 1px solid #263650;
+  border-radius: 8px;
+  padding: 8px 16px;
+  margin-bottom: 12px;
+}
+
+.block header {
+  color: #8ba6c9;
+  font-size: 0.8rem;
+}
+
+.block-text {
+  line-height: 1.8;
+}
+
+button.mention {
+  padding: 0 4px;
+  margin: 0 1px;
+  border-radius: 4px;
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+button.mention.decision-needs_review,
+button.mention.decision-unresolved {
+  border-color: #b3874d;
+  background: rgba(179, 135, 77, 0.15);
+}
+
+button.mention.decision-user_assigned {
+  border-color: #4d7fb3;
+  background: rgba(77, 127, 179, 0.15);
+}
+
+button.mention.decision-auto_linked {
+  border-color: #3f8f6b;
+  background: rgba(63, 143, 107, 0.12);
+}
+
+button.mention.selected {
+  outline: 2px solid #6ea8ff;
+}
+
+.candidates .candidate {
+  border: 1px solid #263650;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.candidate-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.evidence {
+  color: #8ba6c9;
+  font-size: 0.85rem;
+}
+
+.candidate.state-rejected {
+  opacity: 0.55;
+}
+
+.new-entity,
+.entity-picker form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+
+.pipeline .stages {
+  display: flex;
+  gap: 16px;
+  color: #8ba6c9;
+  padding: 0;
+}
+
+.mappings {
+  border-collapse: collapse;
+  margin-top: 12px;
+}
+
+.mappings th,
+.mappings td {
+  border: 1px solid #263650;
+  padding: 4px 12px;
+  text-align: left;
+}
+
+.preview textarea {
+  width: 100%;
+  margin: 8px 0;
+}
+
+.demo-result {
+  border: 1px dashed #33455f;
+  border-radius: 8px;
+  padding: 8px 16px;
+  margin-top: 8px;
 }
