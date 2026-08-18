@@ -327,7 +327,48 @@ The native worker currently emits only `TEXT` blocks with source `NATIVE`. Image
 pages are identified as `RASTER` and mixed native/image pages as `MIXED`; OCR remains a
 separate adapter and is not silently simulated by this worker. If OCR is requested for
 an image-only page before that adapter is available, the worker terminates the job with
-an explicit `OCR_ENGINE_FAILURE` event.
+an explicit `OCR_ENGINE_FAILURE` event. The application side fails closed in the mirror
+case: when OCR is not enabled, a completed document containing `RASTER` pages is
+rejected as `UNSUPPORTED_DOCUMENT` rather than persisted with unparsed content.
+
+## OCR Worker
+
+`python/ocr/ocr_worker.py` is the Protocol v1 adapter for scanned/raster documents. It
+reuses the native parser's per-page classification and adds the raster path:
+
+- `NATIVE` pages keep their native text blocks (source `NATIVE`).
+- `RASTER` pages are rasterized with `pypdfium2` at roughly 300 DPI
+  (`python/ocr/render.py`), optionally preprocessed with OpenCV
+  (`python/image_processing/preprocess.py`, grayscale + Otsu binarization;
+  passes through unchanged when OpenCV is unavailable), and recognized by the
+  pluggable `OcrEngine` boundary (`python/ocr/engine.py`). The PaddleOCR
+  adapter runs with `lang='ch'` and normalizes both PaddleOCR 2.x and 3.x
+  result shapes. Blocks are emitted with source `OCR`, a confidence score, and
+  page-relative normalized bounding boxes converted from rendered pixels.
+- `MIXED` pages (V1 limitation) emit their native text layer only; embedded
+  image regions are not OCRed.
+
+Progress events use stages `RENDER` / `PREPROCESS` / `OCR` for raster pages and
+`NATIVE_PARSE` for native pages. The OCR dependencies (PaddleOCR, pypdfium2,
+OpenCV, numpy) are optional extras (`pip install -e '.[ocr]'`; paddlepaddle
+itself installs separately per platform) and are imported lazily, so the worker
+serves native-only documents without them. One `PaddleOCR` engine is built per
+worker process and reused across jobs, and jobs execute serially through a
+single worker slot — at most one job renders and infers at a time — so page
+images cannot pile up in front of the predictor and inference is never
+concurrent (PaddleOCR's predictor is not documented as thread-safe; a lock
+guards it as a secondary backstop). Queued jobs are cancelled without being
+started. Missing dependencies surface as protocol errors, never as import-time
+crashes:
+
+- `RENDER_FAILURE` when the rasterizer is unavailable or a page cannot render
+- `MODEL_LOAD_FAILURE` when PaddleOCR or its models cannot load
+- `OCR_ENGINE_FAILURE` when recognition fails, or OCR is requested while
+  `enableOcr` is false
+
+The desktop composition root selects this worker when `ALIASAI_OCR_WORKER_PATH`
+is set (parser type `OCR_PDF`, `enableOcr: true`); otherwise it keeps the
+native worker.
 
 ## OCR Evaluation Principle
 

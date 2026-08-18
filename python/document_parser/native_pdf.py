@@ -91,6 +91,22 @@ def _page_model(layout: LTPage, page_no: int, rotation: int) -> dict[str, object
     }
 
 
+def count_pdf_pages(file_path: str) -> int:
+    """Count PDF pages without extracting text; shares the parse error mapping."""
+    source = Path(file_path)
+    if not source.is_file():
+        raise NativePdfError("FILE_NOT_FOUND", "Document file was not found")
+    try:
+        with source.open("rb") as stream:
+            return len(list(PDFPage.get_pages(stream, check_extractable=True)))
+    except PDFTextExtractionNotAllowed as error:
+        raise NativePdfError("PDF_PARSE_FAILURE", "PDF does not allow text extraction") from error
+    except PDFEncryptionError as error:
+        raise NativePdfError("PDF_PARSE_FAILURE", "Password-protected PDF cannot be parsed") from error
+    except (OSError, ValueError, PDFSyntaxError) as error:
+        raise NativePdfError("PDF_PARSE_FAILURE", "PDF native text extraction failed") from error
+
+
 def parse_native_pdf(
     file_path: str,
     *,

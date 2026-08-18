@@ -14,24 +14,25 @@ pnpm test:python
 pnpm build
 ```
 
-Install the Python parser and test dependencies with `python3 -m pip install -e '.[dev]'`. Native PDF text parsing is implemented locally with the MIT-licensed `pdfminer.six`. OCR, NER, pseudonymization policy, and AI provider integrations remain intentionally out of scope.
+Install the Python parser and test dependencies with `python3 -m pip install -e '.[dev]'`. Native PDF text parsing is implemented locally with the MIT-licensed `pdfminer.six`. An OCR worker for scanned PDFs (PaddleOCR + pypdfium2 rendering + optional OpenCV preprocessing) is available via the optional `ocr` extra (`python3 -m pip install -e '.[ocr]'`) and the `ALIASAI_OCR_WORKER_PATH` desktop setting. NER and AI provider integrations remain intentionally out of scope.
 
 ## Package boundaries
 
 - `apps/desktop`: sandboxed Electron main process, narrow preload bridge, and React renderer shell.
 - `packages/domain`: pure TypeScript domain types and invariant guards; no persistence or plaintext protected values.
 - `packages/database`: SQLite/Drizzle schema, migration, integrity guards, and initial repositories.
-- `packages/crypto`: versioned AES-256-GCM envelopes and Matter-scoped HMAC fingerprints; key storage is deferred to the desktop application layer.
+- `packages/crypto`: versioned AES-256-GCM envelopes and Matter-scoped HMAC fingerprints; OS keychain-protected key storage lives in the desktop main process (`safeStorage`).
 - `packages/document`: non-destructive local source inspection and SHA-256 file fingerprints.
 - `packages/privacy-detection`: pluggable, plaintext-free location proposals with deterministic high-precision V1 rules.
 - `packages/entity-resolution`: type-specific value normalization, deterministic `er-v1` evidence scoring, and an explainable rule-first proposal gate; it never applies identity mutations.
 - `packages/pseudonymization`: offset-based sanitized text formatting without raw global replacement, plus type-level default restore policies.
 - `packages/rehydration`: Public Token-anchored local restoration.
 - `packages/ai`: reserved sanitized provider boundary; no provider integration exists yet.
-- `packages/python-bridge`: validated JSON Lines Protocol v1 client with mock and native-PDF worker contract tests.
+- `packages/python-bridge`: validated JSON Lines Protocol v1 client with mock, native-PDF, and OCR worker contract tests.
 - `packages/application`: encrypted Matter/document workflows, engine-independent Document processing, transactional Privacy Detection, Entity Resolution with ProtectedValue fingerprints, fail-closed Pseudonymization with an encrypted Mapping Vault, and policy-filtered local Rehydration.
 - `python/document_parser`: native PDF text extraction plus a protocol mock; parser output contains pages and normalized text blocks only.
-- `python/ocr`, `python/ner`, `python/image_processing`: replaceable package boundaries; no OCR or ML implementation exists yet.
+- `python/ocr`, `python/image_processing`: scanned-PDF path — pypdfium2 rendering, optional OpenCV preprocessing, PaddleOCR engine adapter, and a Protocol v1 OCR worker; heavy dependencies are lazily imported extras.
+- `python/ner`: replaceable package boundary; no NER implementation exists yet.
 
 No sensitive document, key, database, or generated runtime data should be committed.
 
@@ -40,7 +41,7 @@ V1 detector, encrypts Mention text, and atomically persists unassigned Mentions 
 the DETECT ProcessingJob and Document state. Successful calls are idempotent;
 failures retain no partial Mentions and can be retried. End-to-end tests exercise a
 real synthetic PDF through the native Python Worker into encrypted Blocks and
-encrypted Mentions. NER, OCR, and AI remain outside this implementation.
+encrypted Mentions. NER and AI remain outside this implementation.
 
 `EntityResolutionService` continues the chain: it decrypts each Mention transiently,
 normalizes and fingerprints its value with a Matter-derived HMAC search key, creates

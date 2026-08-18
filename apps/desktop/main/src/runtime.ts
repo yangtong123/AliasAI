@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { generateUuidV7 } from '@aliasai/crypto'
 import {
   DocumentImportService,
   DocumentProcessingService,
@@ -78,13 +79,20 @@ export async function initializeRuntime(app: AppLike, safeStorage: SafeStorage):
     resolutionRepository,
     keys
   )
+  const documentWorker = resolveDocumentWorker()
   const services: AliasAiServices = {
     matters: new MatterService(new MatterRepository(db), keys),
     importDocs: new DocumentImportService(documents, keys),
     processing: new DocumentProcessingService(
       documents,
-      new PythonWorkerDocumentProcessor('NATIVE_PDF', new PythonWorkerClient(resolvePythonRuntime())),
-      keys
+      new PythonWorkerDocumentProcessor(
+        documentWorker.parserType,
+        new PythonWorkerClient({ command: documentWorker.command, args: documentWorker.args })
+      ),
+      keys,
+      Date.now,
+      generateUuidV7,
+      { enableOcr: documentWorker.enableOcr }
     ),
     detection: new PrivacyDetectionService(new PrivacyDetectionRepository(db), keys),
     resolution: new EntityResolutionService(
@@ -127,6 +135,25 @@ export class PythonRuntimeError extends Error {
   }
 }
 
+/** Marker file identifying the monorepo root. */
+const WORKSPACE_MARKER = 'pnpm-workspace.yaml'
+
+/**
+ * Walks up from `startDirectory` until it finds the monorepo root (identified
+ * by `pnpm-workspace.yaml`), independent of the process cwd. Returns undefined
+ * when no marker is present (e.g. a packaged install outside the repo).
+ */
+function findWorkspaceRoot(startDirectory: string): string | undefined {
+  let current = resolve(startDirectory)
+  for (let depth = 0; depth < 10; depth += 1) {
+    if (existsSync(join(current, WORKSPACE_MARKER))) return current
+    const parent = dirname(current)
+    if (parent === current) return undefined
+    current = parent
+  }
+  return undefined
+}
+
 /** Resolves the Python command and native worker script; env overrides win. */
 export function resolvePythonRuntime(): { command: string; args: string[] } {
   const command = process.env.ALIASAI_PYTHON_COMMAND
@@ -134,18 +161,74 @@ export function resolvePythonRuntime(): { command: string; args: string[] } {
   if (command !== undefined && scriptPath !== undefined) {
     return { command, args: [scriptPath] }
   }
-  const script = scriptPath ?? findFirstExisting(
-    'python/document_parser/native_worker.py',
-    join('..', 'python', 'document_parser', 'native_worker.py')
-  )
-  const python = command ?? findFirstExisting('.venv/bin/python', join('..', '.venv', 'bin', 'python'))
-  if (script === undefined || python === undefined) {
+  const workspaceRoot = findWorkspaceRoot(process.cwd())
+  const script = scriptPath ?? findWorkerScript(workspaceRoot)
+  const python = command ?? resolvePythonCommand(workspaceRoot)
+  if (script === undefined) {
     throw new PythonRuntimeError(
       'PYTHON_RUNTIME_UNAVAILABLE',
       'The document parsing worker is not available. Set ALIASAI_PYTHON_COMMAND and ALIASAI_NATIVE_WORKER_PATH.'
     )
   }
   return { command: python, args: [script] }
+}
+
+export interface ResolvedDocumentWorker {
+  readonly command: string
+  readonly args: readonly string[]
+  readonly parserType: string
+  readonly enableOcr: boolean
+}
+
+/**
+ * Resolves the document worker for the composition root. When
+ * ALIASAI_OCR_WORKER_PATH is set, the OCR worker (render + PaddleOCR for
+ * raster pages) is used with OCR enabled; otherwise the native PDF worker.
+ */
+export function resolveDocumentWorker(): ResolvedDocumentWorker {
+  const ocrWorkerPath = process.env.ALIASAI_OCR_WORKER_PATH
+  if (ocrWorkerPath === undefined) {
+    const runtime = resolvePythonRuntime()
+    return { command: runtime.command, args: runtime.args, parserType: 'NATIVE_PDF', enableOcr: false }
+  }
+  const python = process.env.ALIASAI_PYTHON_COMMAND ?? resolvePythonCommand(findWorkspaceRoot(process.cwd()))
+  return { command: python, args: [ocrWorkerPath], parserType: 'OCR_PDF', enableOcr: true }
+}
+
+/**
+ * Locates the native worker script relative to the workspace root when one can
+ * be found; otherwise falls back to cwd-relative candidates. The `../../`
+ * prefix covers `apps/desktop` as the process cwd without a workspace marker.
+ */
+function findWorkerScript(workspaceRoot: string | undefined): string | undefined {
+  if (workspaceRoot !== undefined) {
+    const anchored = join(workspaceRoot, 'python', 'document_parser', 'native_worker.py')
+    if (existsSync(anchored)) return anchored
+  }
+  return findFirstExisting(
+    'python/document_parser/native_worker.py',
+    join('..', 'python', 'document_parser', 'native_worker.py'),
+    join('..', '..', 'python', 'document_parser', 'native_worker.py')
+  )
+}
+
+/**
+ * Prefers the repository virtual environment anchored to the workspace root;
+ * falls back to the system python3 on PATH (clean CI runners only have the
+ * latter).
+ */
+function resolvePythonCommand(workspaceRoot: string | undefined): string {
+  if (workspaceRoot !== undefined) {
+    const anchored = join(workspaceRoot, '.venv', 'bin', 'python')
+    if (existsSync(anchored)) return anchored
+  }
+  return (
+    findFirstExisting(
+      '.venv/bin/python',
+      join('..', '.venv', 'bin', 'python'),
+      join('..', '..', '.venv', 'bin', 'python')
+    ) ?? 'python3'
+  )
 }
 
 function findFirstExisting(...candidates: readonly string[]): string | undefined {

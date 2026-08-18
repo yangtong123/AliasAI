@@ -20,6 +20,11 @@ export interface DocumentProcessor {
 
 export type DocumentProcessingIdFactory = (timestamp: number) => string
 
+export interface DocumentProcessingOptions {
+  /** Forwarded to the Protocol v1 worker; enables OCR of raster pages. */
+  readonly enableOcr?: boolean
+}
+
 export class DocumentProcessingError extends Error {
   constructor(
     readonly code: string,
@@ -46,7 +51,8 @@ export class DocumentProcessingService {
     private readonly processor: DocumentProcessor,
     private readonly keys: ApplicationKeys,
     private readonly now: () => number = Date.now,
-    private readonly generateId: DocumentProcessingIdFactory = generateUuidV7
+    private readonly generateId: DocumentProcessingIdFactory = generateUuidV7,
+    private readonly options: DocumentProcessingOptions = {}
   ) {
     if (processor.parserType.trim().length === 0) throw new Error('Document processor parserType must not be empty')
   }
@@ -95,7 +101,7 @@ export class DocumentProcessingService {
           filePath,
           options: {
             preferNativeText: true,
-            enableOcr: false,
+            enableOcr: this.options.enableOcr ?? false,
             enableLayoutAnalysis: false,
             pageStart: 1,
             pageEnd: null
@@ -232,6 +238,18 @@ export class DocumentProcessingService {
     for (let pageNo = 1; pageNo <= terminal.pageCount; pageNo += 1) {
       if (!pages.has(pageNo)) {
         throw new DocumentProcessingError('INVALID_DOCUMENT_MODEL', 'Document processor returned a non-contiguous document')
+      }
+    }
+    if (this.options.enableOcr !== true) {
+      // Without OCR a raster page carries no text layer at all; completing
+      // anyway would mark unparsed content as PARSED. Fail closed instead.
+      for (const page of pages.values()) {
+        if (page.sourceType === 'RASTER') {
+          throw new DocumentProcessingError(
+            'UNSUPPORTED_DOCUMENT',
+            'Document contains raster pages that require OCR'
+          )
+        }
       }
     }
   }

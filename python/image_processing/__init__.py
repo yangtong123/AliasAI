@@ -1,1 +1,1 @@
-"""Replaceable image-processing adapters will live here."""
+"""Image preprocessing adapters for the OCR path (optional OpenCV dependency)."""

@@ -7,6 +7,14 @@ dependencies = ["pdfminer.six>=20260107,<20270000"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# OCR extras are optional heavy dependencies; the worker runs native-only without them.
+# paddlepaddle itself must be installed separately per platform (see PaddleOCR docs).
+ocr = [
+    "numpy>=1.26",
+    "opencv-python-headless>=4.8",
+    "paddleocr>=2.7",
+    "pypdfium2>=4.20",
+]
 
 [tool.setuptools]
 package-dir = {"" = "python"}

@@ -182,6 +182,101 @@ describe('DocumentProcessingService', () => {
     )
   })
 
+  it('forwards enableOcr to the processor request when configured', async () => {
+    const imported = await importSyntheticSource()
+    const processor = successfulFakeProcessor((request) => {
+      expect(request.options).toMatchObject({ preferNativeText: true, enableOcr: true, enableLayoutAnalysis: false })
+    })
+
+    const completed = await new DocumentProcessingService(
+      documents,
+      processor,
+      { persistenceKey: key },
+      now,
+      undefined,
+      { enableOcr: true }
+    ).process(imported.documentId)
+
+    expect(completed.parseStatus).toBe('PARSED')
+  })
+
+  function rasterFakeProcessor(withOcrBlocks: boolean): DocumentProcessor {
+    return {
+      parserType: 'SYNTHETIC_RASTER_PROCESSOR',
+      async processDocument(request, onEvent): Promise<WorkerTerminalEvent> {
+        await onEvent({
+          protocolVersion: 1,
+          type: 'page_result',
+          jobId: request.jobId,
+          documentId: request.documentId,
+          page: {
+            pageNo: 1,
+            originalWidth: 100,
+            originalHeight: 200,
+            rotation: 0,
+            sourceType: 'RASTER',
+            blocks: withOcrBlocks
+              ? [
+                  {
+                    localId: 'synthetic-ocr-block',
+                    blockType: 'TEXT' as const,
+                    text: 'Synthetic scanned line',
+                    bbox: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+                    confidence: 0.9,
+                    source: 'OCR' as const,
+                    readingOrder: 0
+                  }
+                ]
+              : []
+          }
+        })
+        return {
+          protocolVersion: 1,
+          type: 'completed',
+          jobId: request.jobId,
+          documentId: request.documentId,
+          pageCount: 1,
+          processedPages: 1
+        }
+      }
+    }
+  }
+
+  it('fails closed on raster pages when OCR is disabled', async () => {
+    const imported = await importSyntheticSource()
+
+    await expect(
+      new DocumentProcessingService(documents, rasterFakeProcessor(false), { persistenceKey: key }, now).process(
+        imported.documentId
+      )
+    ).rejects.toMatchObject({ code: 'UNSUPPORTED_DOCUMENT' })
+
+    expect(documents.findById(imported.documentId)?.parseStatus).toBe('FAILED')
+    expect(
+      sqlite.prepare('SELECT COUNT(*) AS count FROM document_pages WHERE document_id = ?').get(imported.documentId)
+    ).toEqual({ count: 0 })
+  })
+
+  it('accepts OCRed raster pages when OCR is enabled', async () => {
+    const imported = await importSyntheticSource()
+
+    const completed = await new DocumentProcessingService(
+      documents,
+      rasterFakeProcessor(true),
+      { persistenceKey: key },
+      now,
+      undefined,
+      { enableOcr: true }
+    ).process(imported.documentId)
+
+    expect(completed.parseStatus).toBe('PARSED')
+    const block = sqlite.prepare('SELECT id, source FROM document_blocks WHERE document_id = ?').get(imported.documentId) as {
+      id: string
+      source: string
+    }
+    expect(block.source).toBe('OCR')
+  })
+
   it('connects the native PDF worker through the same processor port', async () => {
     const imported = await importSyntheticSource(syntheticPdf())
     const virtualEnvironmentPython = resolve(process.cwd(), '.venv/bin/python')

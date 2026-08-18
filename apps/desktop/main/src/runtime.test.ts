@@ -4,16 +4,22 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { initializeRuntime, resolvePythonRuntime } from './runtime'
+import { initializeRuntime, resolveDocumentWorker, resolvePythonRuntime } from './runtime'
 
 describe('desktop runtime', () => {
   const directories: string[] = []
   const previousPythonCommand = process.env.ALIASAI_PYTHON_COMMAND
   const previousWorkerPath = process.env.ALIASAI_NATIVE_WORKER_PATH
+  const previousOcrWorkerPath = process.env.ALIASAI_OCR_WORKER_PATH
 
   afterEach(async () => {
-    for (const name of ['ALIASAI_PYTHON_COMMAND', 'ALIASAI_NATIVE_WORKER_PATH'] as const) {
-      const previous = name === 'ALIASAI_PYTHON_COMMAND' ? previousPythonCommand : previousWorkerPath
+    const previousValues = {
+      ALIASAI_PYTHON_COMMAND: previousPythonCommand,
+      ALIASAI_NATIVE_WORKER_PATH: previousWorkerPath,
+      ALIASAI_OCR_WORKER_PATH: previousOcrWorkerPath
+    } as const
+    for (const name of Object.keys(previousValues) as (keyof typeof previousValues)[]) {
+      const previous = previousValues[name]
       if (previous === undefined) delete process.env[name]
       else process.env[name] = previous
     }
@@ -38,6 +44,48 @@ describe('desktop runtime', () => {
     } else {
       expect(runtime.command).toBe('python3')
     }
+  })
+
+  it('resolves the worker and venv when cwd is the desktop package', () => {
+    delete process.env.ALIASAI_PYTHON_COMMAND
+    delete process.env.ALIASAI_NATIVE_WORKER_PATH
+
+    const repoRoot = process.cwd()
+    const originalCwd = process.cwd()
+    try {
+      process.chdir(join(repoRoot, 'apps', 'desktop'))
+      const runtime = resolvePythonRuntime()
+      const virtualEnvironmentPython = join(repoRoot, '.venv', 'bin', 'python')
+      expect(runtime.command).toBe(existsSync(virtualEnvironmentPython) ? virtualEnvironmentPython : 'python3')
+      expect(runtime.args).toEqual([resolve(repoRoot, 'python/document_parser/native_worker.py')])
+    } finally {
+      process.chdir(originalCwd)
+    }
+  })
+
+  it('resolves the OCR worker when ALIASAI_OCR_WORKER_PATH is set', () => {
+    process.env.ALIASAI_PYTHON_COMMAND = '/synthetic/python'
+    process.env.ALIASAI_OCR_WORKER_PATH = '/synthetic/ocr_worker.py'
+
+    expect(resolveDocumentWorker()).toEqual({
+      command: '/synthetic/python',
+      args: ['/synthetic/ocr_worker.py'],
+      parserType: 'OCR_PDF',
+      enableOcr: true
+    })
+  })
+
+  it('falls back to the native worker when ALIASAI_OCR_WORKER_PATH is unset', () => {
+    delete process.env.ALIASAI_OCR_WORKER_PATH
+    process.env.ALIASAI_PYTHON_COMMAND = '/synthetic/python'
+    process.env.ALIASAI_NATIVE_WORKER_PATH = '/synthetic/worker.py'
+
+    expect(resolveDocumentWorker()).toEqual({
+      command: '/synthetic/python',
+      args: ['/synthetic/worker.py'],
+      parserType: 'NATIVE_PDF',
+      enableOcr: false
+    })
   })
 
   it('initializes the full runtime against a temp user data directory', async () => {
