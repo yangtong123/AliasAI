@@ -22,7 +22,6 @@ import {
   DocumentImportService,
   DocumentProcessingService,
   EntityResolutionService,
-  EntityService,
   MatterService,
   PrivacyDetectionService,
   PseudonymizationService,
@@ -88,11 +87,7 @@ describe('review flow end to end', () => {
       new EntityRepository(db),
       keys
     )
-    operations = new ReviewOperationService(
-      resolution,
-      new EntityService(new EntityRepository(db), keys),
-      reviewQuery
-    )
+    operations = new ReviewOperationService(resolution, reviewQuery)
     preview = new SanitizedPreviewService(
       new DocumentRepository(db),
       new ReviewQueryRepository(db),

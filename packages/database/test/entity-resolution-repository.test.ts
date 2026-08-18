@@ -11,6 +11,7 @@ import {
   migrateDatabase,
   type AliasAiDatabase,
   type CompleteEntityResolutionInput,
+  type CreateEntityWithAssignmentInput,
   type SqliteClient
 } from '../src/index'
 import type { Entity } from '@aliasai/domain'
@@ -1262,6 +1263,295 @@ describe('Entity Resolution repositories', () => {
         { id: 'candidate-1', state: 'ACCEPTED', resolved_at: 11 },
         { id: 'candidate-2', state: 'REJECTED', resolved_at: 11 }
       ])
+    })
+
+    it('rejects assignment once the Document is sanitized', () => {
+      const mentionId = seedDetectedDocument('document-1')
+      insertEntity('entity-1')
+      sqlite.prepare("UPDATE documents SET parse_status = 'SANITIZED' WHERE id = 'document-1'").run()
+
+      expect(() =>
+        resolution.assignMention({
+          mentionId,
+          entityId: 'entity-1',
+          resolvedAt: 8,
+          event: {
+            id: 'event-assign',
+            matterId: 'matter-1',
+            type: 'MENTION_ASSIGNED',
+            entityId: 'entity-1',
+            mentionId,
+            actor: 'USER',
+            payloadCipher: cipher('event'),
+            createdAt: 8
+          }
+        })
+      ).toThrow('Document review is closed after sanitization')
+      expect(resolution.findMentionById(mentionId)?.entityId).toBeUndefined()
+      expect(sqlite.prepare('SELECT COUNT(*) AS count FROM resolution_events').get()).toEqual({ count: 0 })
+    })
+  })
+
+  describe('EntityResolutionRepository.confirmMention', () => {
+    const confirmEvent = (id: string, mentionId: string, entityId?: string) => ({
+      id,
+      matterId: 'matter-1',
+      type: 'ENTITY_CONFIRMED' as const,
+      ...(entityId === undefined ? {} : { entityId }),
+      mentionId,
+      actor: 'USER' as const,
+      payloadCipher: cipher('confirm'),
+      createdAt: 9
+    })
+
+    function assignFirst(mentionId: string, entityId: string): void {
+      resolution.assignMention({
+        mentionId,
+        entityId,
+        resolvedAt: 8,
+        event: {
+          id: 'event-assign',
+          matterId: 'matter-1',
+          type: 'MENTION_ASSIGNED',
+          entityId,
+          mentionId,
+          actor: 'USER',
+          payloadCipher: cipher('event'),
+          createdAt: 8
+        }
+      })
+    }
+
+    it('records the ENTITY_CONFIRMED event once and marks the Mention reviewed', () => {
+      const mentionId = seedDetectedDocument('document-1')
+      insertEntity('entity-1')
+      assignFirst(mentionId, 'entity-1')
+
+      const confirmed = resolution.confirmMention({ mentionId, event: confirmEvent('event-confirm', mentionId, 'entity-1') })
+      expect(confirmed.reviewStatus).toBe('CONFIRMED')
+
+      // Confirming the same assignment again is a no-op, not a new transition.
+      const again = resolution.confirmMention({ mentionId, event: confirmEvent('event-confirm-2', mentionId, 'entity-1') })
+      expect(again.reviewStatus).toBe('CONFIRMED')
+      expect(
+        sqlite.prepare("SELECT COUNT(*) AS count FROM resolution_events WHERE event_type = 'ENTITY_CONFIRMED'").get()
+      ).toEqual({ count: 1 })
+    })
+
+    it('rejects confirming an unassigned Mention', () => {
+      const mentionId = seedDetectedDocument('document-1')
+
+      expect(() => resolution.confirmMention({ mentionId, event: confirmEvent('event-confirm', mentionId) })).toThrow(
+        'only an assigned mention can be confirmed'
+      )
+      expect(sqlite.prepare('SELECT COUNT(*) AS count FROM resolution_events').get()).toEqual({ count: 0 })
+    })
+
+    it('rejects event bindings that do not match the confirmed assignment', () => {
+      const mentionId = seedDetectedDocument('document-1')
+      insertEntity('entity-1')
+      insertEntity('entity-2')
+      assignFirst(mentionId, 'entity-1')
+
+      expect(() =>
+        resolution.confirmMention({
+          mentionId,
+          event: { ...confirmEvent('event-confirm', mentionId, 'entity-1'), type: 'MENTION_ASSIGNED' }
+        })
+      ).toThrow('Resolution event type must be ENTITY_CONFIRMED')
+      expect(() =>
+        resolution.confirmMention({
+          mentionId,
+          event: { ...confirmEvent('event-confirm', mentionId, 'entity-1'), actor: 'SYSTEM' }
+        })
+      ).toThrow('Confirmation events must be recorded by the USER actor')
+      expect(() =>
+        resolution.confirmMention({ mentionId, event: confirmEvent('event-confirm', mentionId, 'entity-2') })
+      ).toThrow('Resolution event must reference the confirmed Entity')
+      expect(
+        sqlite.prepare("SELECT COUNT(*) AS count FROM resolution_events WHERE event_type = 'ENTITY_CONFIRMED'").get()
+      ).toEqual({ count: 0 })
+    })
+
+    it('binds confirmation to the current assignment after a reassignment', () => {
+      const mentionId = seedDetectedDocument('document-1')
+      insertEntity('entity-1')
+      insertEntity('entity-2')
+      assignFirst(mentionId, 'entity-1')
+      resolution.confirmMention({ mentionId, event: confirmEvent('event-confirm-1', mentionId, 'entity-1') })
+
+      // Reassigning supersedes the confirmation: the Mention is unreviewed again.
+      resolution.assignMention({
+        mentionId,
+        entityId: 'entity-2',
+        resolvedAt: 10,
+        event: {
+          id: 'event-reassign',
+          matterId: 'matter-1',
+          type: 'MENTION_REASSIGNED',
+          entityId: 'entity-2',
+          mentionId,
+          actor: 'USER',
+          payloadCipher: cipher('event'),
+          createdAt: 10
+        }
+      })
+      expect(resolution.findMentionById(mentionId)?.reviewStatus).toBe('UNREVIEWED')
+
+      // Confirming the new assignment records a second, correctly bound event.
+      const reconfirmed = resolution.confirmMention({
+        mentionId,
+        event: confirmEvent('event-confirm-2', mentionId, 'entity-2')
+      })
+      expect(reconfirmed.reviewStatus).toBe('CONFIRMED')
+      expect(
+        sqlite
+          .prepare("SELECT entity_id FROM resolution_events WHERE event_type = 'ENTITY_CONFIRMED' ORDER BY rowid")
+          .all()
+      ).toEqual([{ entity_id: 'entity-1' }, { entity_id: 'entity-2' }])
+    })
+
+    it('rejects confirmation once the Document is sanitized', () => {
+      const mentionId = seedDetectedDocument('document-1')
+      insertEntity('entity-1')
+      assignFirst(mentionId, 'entity-1')
+      sqlite.prepare("UPDATE documents SET parse_status = 'SANITIZED' WHERE id = 'document-1'").run()
+
+      expect(() =>
+        resolution.confirmMention({ mentionId, event: confirmEvent('event-confirm', mentionId, 'entity-1') })
+      ).toThrow('Document review is closed after sanitization')
+      expect(resolution.findMentionById(mentionId)?.reviewStatus).toBe('UNREVIEWED')
+      expect(
+        sqlite.prepare("SELECT COUNT(*) AS count FROM resolution_events WHERE event_type = 'ENTITY_CONFIRMED'").get()
+      ).toEqual({ count: 0 })
+    })
+  })
+
+  describe('EntityResolutionRepository.createEntityWithAssignment', () => {
+    const newEntityInput = (mentionId: string): CreateEntityWithAssignmentInput => ({
+      entity: {
+        id: 'entity-new',
+        matterId: 'matter-1',
+        type: 'PERSON',
+        publicToken: '@P-entity-new',
+        status: 'ACTIVE',
+        createdAt: 8,
+        updatedAt: 8
+      },
+      primaryAlias: {
+        id: 'alias-new',
+        matterId: 'matter-1',
+        entityId: 'entity-new',
+        alias: 'Reviewer Choice',
+        aliasType: 'PRIMARY',
+        isPrimary: true,
+        createdAt: 8
+      },
+      creationEvent: {
+        id: 'event-create',
+        matterId: 'matter-1',
+        type: 'ENTITY_CREATED',
+        entityId: 'entity-new',
+        actor: 'USER',
+        payloadCipher: cipher('create'),
+        createdAt: 8
+      },
+      mentionId,
+      resolvedAt: 8,
+      assignmentEvent: {
+        id: 'event-assign',
+        matterId: 'matter-1',
+        type: 'MENTION_ASSIGNED',
+        entityId: 'entity-new',
+        mentionId,
+        actor: 'USER',
+        payloadCipher: cipher('assign'),
+        createdAt: 8
+      }
+    })
+
+    it('creates the Entity, assigns the Mention, and closes candidates atomically', () => {
+      const mentionId = seedDetectedDocument('document-1')
+      insertEntity('entity-1')
+      sqlite
+        .prepare(
+          `INSERT INTO resolution_candidates (id, mention_id, candidate_entity_id, score, state, algorithm_version, created_at)
+           VALUES ('candidate-1', ?, 'entity-1', 90, 'PENDING', 'synthetic-v1', 7)`
+        )
+        .run(mentionId)
+
+      const created = resolution.createEntityWithAssignment(newEntityInput(mentionId))
+
+      expect(created.mention.entityId).toBe('entity-new')
+      expect(entities.findById('entity-new')?.publicToken).toBe('@P-entity-new')
+      expect(
+        sqlite.prepare('SELECT event_type, actor FROM resolution_events ORDER BY rowid').all()
+      ).toEqual([
+        { event_type: 'ENTITY_CREATED', actor: 'USER' },
+        { event_type: 'MENTION_ASSIGNED', actor: 'USER' }
+      ])
+      expect(sqlite.prepare('SELECT state, resolved_at FROM resolution_candidates').all()).toEqual([
+        { state: 'REJECTED', resolved_at: 8 }
+      ])
+    })
+
+    it('rolls the Entity back when the assignment fails', () => {
+      seedDetectedDocument('document-1')
+
+      expect(() => resolution.createEntityWithAssignment(newEntityInput('missing-mention'))).toThrow(
+        'Mention was not found'
+      )
+      expect(entities.findById('entity-new')).toBeUndefined()
+      expect(sqlite.prepare('SELECT COUNT(*) AS count FROM entity_aliases').get()).toEqual({ count: 0 })
+      expect(sqlite.prepare('SELECT COUNT(*) AS count FROM resolution_events').get()).toEqual({ count: 0 })
+    })
+
+    it('rolls the Entity back when a mid-transaction write fails', () => {
+      const mentionId = seedDetectedDocument('document-1')
+      insertEntity('entity-1')
+      // A conflicting Matter-wide alias fails the alias insert after the Entity
+      // row has been written inside the transaction.
+      entities.addAlias({
+        id: 'alias-existing',
+        matterId: 'matter-1',
+        entityId: 'entity-1',
+        alias: 'Reviewer Choice',
+        aliasType: 'GENERIC',
+        isPrimary: false,
+        createdAt: 7
+      })
+
+      expect(() => resolution.createEntityWithAssignment(newEntityInput(mentionId))).toThrow()
+      expect(entities.findById('entity-new')).toBeUndefined()
+      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM entity_aliases WHERE id = 'alias-new'").get()).toEqual({
+        count: 0
+      })
+      expect(sqlite.prepare('SELECT COUNT(*) AS count FROM resolution_events').get()).toEqual({ count: 0 })
+      expect(resolution.findMentionById(mentionId)?.entityId).toBeUndefined()
+    })
+
+    it('rejects creation and assignment once the Document is sanitized', () => {
+      const mentionId = seedDetectedDocument('document-1')
+      sqlite.prepare("UPDATE documents SET parse_status = 'SANITIZED' WHERE id = 'document-1'").run()
+
+      expect(() => resolution.createEntityWithAssignment(newEntityInput(mentionId))).toThrow(
+        'Document review is closed after sanitization'
+      )
+      expect(entities.findById('entity-new')).toBeUndefined()
+      expect(sqlite.prepare('SELECT COUNT(*) AS count FROM resolution_events').get()).toEqual({ count: 0 })
+    })
+
+    it('records user decisions only', () => {
+      const mentionId = seedDetectedDocument('document-1')
+      const input = newEntityInput(mentionId)
+
+      expect(() =>
+        resolution.createEntityWithAssignment({
+          ...input,
+          creationEvent: { ...input.creationEvent, actor: 'SYSTEM' }
+        })
+      ).toThrow('Manual creation and assignment events must be recorded by the USER actor')
+      expect(entities.findById('entity-new')).toBeUndefined()
     })
   })
 

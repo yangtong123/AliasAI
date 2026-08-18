@@ -1,6 +1,6 @@
 import type { EntityType } from '@aliasai/domain'
 import type { ConstraintDTO, EntitySummaryDTO, MentionReviewDTO, ReviewQueryService } from './review-read'
-import type { EntityResolutionService, EntityService } from './index'
+import type { EntityResolutionService } from './index'
 
 export class ReviewOperationError extends Error {
   constructor(
@@ -21,7 +21,6 @@ export class ReviewOperationError extends Error {
 export class ReviewOperationService {
   constructor(
     private readonly resolution: EntityResolutionService,
-    private readonly entities: EntityService,
     private readonly review: ReviewQueryService
   ) {}
 
@@ -32,9 +31,9 @@ export class ReviewOperationService {
   }
 
   /**
-   * Confirms a mention's current assignment. Assigning the same entity would
-   * throw, so confirmation is an idempotent read-back; recording a distinct
-   * ENTITY_CONFIRMED event needs a repository entry point in a later version.
+   * Confirms a mention's current assignment; the repository writes the
+   * ENTITY_CONFIRMED event and marks the mention reviewed. Confirming the same
+   * assignment again is an idempotent no-op.
    */
   confirmMention(mentionId: string): MentionReviewDTO {
     const mention = this.review.getMention(mentionId)
@@ -44,13 +43,13 @@ export class ReviewOperationService {
     if (mention.assignedEntity === null) {
       throw new ReviewOperationError('MENTION_UNASSIGNED', 'Only an assigned Mention can be confirmed')
     }
-    return mention
+    this.resolution.confirm(mentionId)
+    return this.requireMention(mentionId)
   }
 
   /**
-   * Creates a new USER-actor Entity and assigns the mention to it. The two
-   * steps commit in separate transactions; a crash between them leaves a
-   * harmless unassigned Entity.
+   * Creates a new USER-actor Entity and assigns the mention to it in a single
+   * transaction: a crash can never leave an unassigned Entity behind.
    */
   createEntityAndAssign(
     mentionId: string,
@@ -60,8 +59,7 @@ export class ReviewOperationService {
     if (mention === undefined) {
       throw new ReviewOperationError('MENTION_NOT_FOUND', 'Mention was not found')
     }
-    const created = this.entities.create(mention.matterId, input.entityType, input.primaryAlias)
-    this.resolution.assign(mentionId, created.entity.id)
+    const created = this.resolution.createEntityWithAssignment(mentionId, input)
     const refreshed = this.review.getMention(mentionId)
     const entity = refreshed?.assignedEntity
     if (refreshed === undefined || entity == null || entity.id !== created.entity.id) {

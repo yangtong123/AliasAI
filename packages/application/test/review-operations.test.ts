@@ -15,7 +15,6 @@ import {
 } from '@aliasai/database'
 import {
   EntityResolutionService,
-  EntityService,
   MatterService,
   ReviewOperationService,
   ReviewQueryService,
@@ -52,7 +51,7 @@ describe('ReviewOperationService', () => {
       new EntityRepository(db),
       keys
     )
-    operations = new ReviewOperationService(resolution, new EntityService(new EntityRepository(db), keys), reviewQuery)
+    operations = new ReviewOperationService(resolution, reviewQuery)
     seedDocumentWithReviewableMention()
   })
 
@@ -83,12 +82,43 @@ describe('ReviewOperationService', () => {
     const confirmed = operations.confirmMention('mention-1')
 
     expect(confirmed.assignedEntity!.id).toBe('entity-1')
+    expect(confirmed.reviewStatus).toBe('CONFIRMED')
+    const events = sqlite
+      .prepare("SELECT event_type, actor FROM resolution_events WHERE mention_id = 'mention-1' ORDER BY rowid")
+      .all() as Array<{ event_type: string; actor: string }>
+    expect(events).toEqual([
+      { event_type: 'MENTION_ASSIGNED', actor: 'USER' },
+      { event_type: 'ENTITY_CONFIRMED', actor: 'USER' }
+    ])
     // Confirming again neither throws nor writes another event.
     operations.confirmMention('mention-1')
-    const events = sqlite
+    const count = sqlite
       .prepare("SELECT COUNT(*) AS count FROM resolution_events WHERE mention_id = 'mention-1'")
       .all() as Array<{ count: number }>
-    expect(events[0]!.count).toBe(1)
+    expect(count[0]!.count).toBe(2)
+  })
+
+  it('restarts review on reassignment so the new assignment can be confirmed', () => {
+    operations.assignToEntity('mention-1', 'entity-1')
+    operations.confirmMention('mention-1')
+    sqlite
+      .prepare(
+        `INSERT INTO entities (id, matter_id, entity_type, public_token, status, created_at, updated_at)
+         VALUES ('entity-2', 'matter-1', 'PERSON', '@P-entity-2', 'ACTIVE', 12, 12)`
+      )
+      .run()
+
+    operations.assignToEntity('mention-1', 'entity-2')
+    const reconfirmed = operations.confirmMention('mention-1')
+
+    expect(reconfirmed.assignedEntity!.id).toBe('entity-2')
+    expect(reconfirmed.reviewStatus).toBe('CONFIRMED')
+    const confirmations = sqlite
+      .prepare(
+        "SELECT entity_id FROM resolution_events WHERE event_type = 'ENTITY_CONFIRMED' AND mention_id = 'mention-1' ORDER BY rowid"
+      )
+      .all() as Array<{ entity_id: string }>
+    expect(confirmations).toEqual([{ entity_id: 'entity-1' }, { entity_id: 'entity-2' }])
   })
 
   it('creates a new entity with a USER creation event and assigns the mention', () => {
@@ -98,7 +128,7 @@ describe('ReviewOperationService', () => {
     expect(result.mention.decisionStatus).toBe('USER_ASSIGNED')
     expect(result.mention.assignedEntity!.id).toBe(result.entity.id)
     const events = sqlite
-      .prepare("SELECT event_type, actor FROM resolution_events WHERE entity_id = ? ORDER BY created_at")
+      .prepare("SELECT event_type, actor FROM resolution_events WHERE entity_id = ? ORDER BY rowid")
       .all(result.entity.id) as Array<{ event_type: string; actor: string }>
     expect(events).toEqual([
       { event_type: 'ENTITY_CREATED', actor: 'USER' },

@@ -58,7 +58,12 @@ Layering and boundary rules:
   ciphers, keys, or file paths. Decision status is derived at read time from the
   latest assignment event's actor (AUTO_LINKED vs USER_ASSIGNED) plus candidate
   state (NEEDS_REVIEW/UNRESOLVED). Preview blockers mirror the sanitization
-  fail-closed predicates exactly.
+  fail-closed predicates exactly. Confirming an assignment writes a USER
+  ENTITY_CONFIRMED event and marks the Mention CONFIRMED; reassignment resets
+  the Mention to UNREVIEWED so a later confirmation always binds to the
+  current Entity, and confirming the same assignment twice records exactly
+  one event. Creating an Entity from a Mention commits the Entity, its
+  creation event, and the assignment in one transaction.
 - **IPC** (`apps/desktop/main/src/ipc/`): a pure handler registry (no Electron
   imports) validates every payload with field-level errors and funnels all
   failures through a single sanitizing envelope — known service errors surface
@@ -70,7 +75,10 @@ Layering and boundary rules:
 - **Renderer**: type-only imports from `@aliasai/application` (erased at
   build); polls document status while a pipeline stage is in flight; review
   mutations are disabled once a document is SANITIZED because the artifact is
-  one-shot.
+  one-shot — and the repository enforces the same rule inside the mutation
+  transaction (assign/reassign/confirm/create-and-assign all reject mentions
+  whose Document is SANITIZING or SANITIZED), so a direct IPC call cannot
+  desynchronize the review state from the persisted artifact.
 
 Key bootstrap: main generates the persistence and search keys on first run and
 persists them via Electron `safeStorage` (OS keychain) in `userData`. The
@@ -83,10 +91,13 @@ Known V1 limitations (deliberate):
 - The Python worker resolves from `ALIASAI_PYTHON_COMMAND` /
   `ALIASAI_NATIVE_WORKER_PATH` or the repository `.venv`; packaged-app
   (`asar`) resolution needs `extraResources` and is not implemented.
-- `confirm` is an idempotent read-back; a distinct `ENTITY_CONFIRMED` event
-  needs a new repository entry point (invariant 15 does not cover no-op events).
-- `createEntityAndAssign` spans two transactions; a crash in between leaves a
-  harmless unassigned Entity.
+- The OCR worker (`python/ocr/ocr_worker.py`) is opt-in via
+  `ALIASAI_OCR_WORKER_PATH` and requires the optional `ocr` Python extras
+  (PaddleOCR, pypdfium2, OpenCV, numpy). Without it, a document containing
+  raster pages fails closed with `UNSUPPORTED_DOCUMENT` instead of being
+  marked PARSED with unparsed content.
+- MIXED pages emit only their native text layer; image regions on mixed pages
+  are not OCRed in V1.
 - Job progress is polled by the renderer; push events are a V2 concern.
 
 ## Data Layers
@@ -186,8 +197,9 @@ Native PDF Worker -> encrypted Document Blocks -> PrivacyDetector
                   -> encrypted unassigned Mentions -> SQLite
 ```
 
-OCR and NER can implement the existing parser/detector ports later without changing
-the persistence workflow.
+The OCR worker satisfies the same parser port for scanned documents
+(`ALIASAI_OCR_WORKER_PATH`); NER can implement the detector port later without
+changing the persistence workflow.
 
 The sanitization path continues:
 
@@ -238,8 +250,9 @@ ID-card restoration token: @I-…
 OCR/parser produces a Document Model only. It has no authority to create or merge Entities.
 
 `DocumentProcessingService` depends on a Protocol v1 `DocumentProcessor` port rather
-than a concrete native parser or OCR library. The first adapter launches the native PDF
-worker; a future OCR adapter can satisfy the same port without changing application
+than a concrete native parser or OCR library. The default adapter launches the native
+PDF worker; the OCR worker (`python/ocr/ocr_worker.py`, selected via
+`ALIASAI_OCR_WORKER_PATH`) satisfies the same port without changing application
 or persistence logic.
 
 Worker `page_result` plaintext is encrypted by the application as soon as it crosses

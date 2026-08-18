@@ -34,7 +34,8 @@ import {
   assertSanitizedBlock,
   assertSanitizedDocument,
   assignMentionToEntity,
-  canonicalizeEntityConstraint
+  canonicalizeEntityConstraint,
+  confirmMentionAssignment
 } from '@aliasai/domain'
 import type { AliasAiDatabase } from './client'
 import {
@@ -827,6 +828,19 @@ function toResolutionMentionSource(row: MentionRow): ResolutionMentionSource {
   return { ...toMention(row), textCipher: row.textCipher, fingerprint: row.fingerprint }
 }
 
+/**
+ * Review mutations are only valid while the Document is reviewable. Once a
+ * SANITIZE job starts, the sanitized artifact and its mappings are one-shot;
+ * assignment or confirmation changes afterwards would desynchronize the review
+ * state from the persisted artifact. Enforced inside the mutation transaction,
+ * not just in the renderer.
+ */
+function assertDocumentReviewMutable(parseStatus: string): void {
+  if (parseStatus === 'SANITIZING' || parseStatus === 'SANITIZED') {
+    throw new Error('Document review is closed after sanitization')
+  }
+}
+
 export class EntityRepository {
   constructor(private readonly db: AliasAiDatabase) {}
 
@@ -1132,6 +1146,33 @@ export interface AssignMentionInput {
   readonly resolvedAt: number
   readonly event: CreateResolutionEventInput
   readonly updatedAt?: never
+}
+
+export interface ConfirmMentionInput {
+  readonly mentionId: string
+  readonly event: CreateResolutionEventInput
+}
+
+/**
+ * User-driven "new Entity for this Mention" use case persisted atomically:
+ * the Entity identity aggregate, its creation event, and the Mention
+ * assignment (with its own event) commit in one transaction, so a crash can
+ * never leave an unassigned Entity behind.
+ */
+export interface CreateEntityWithAssignmentInput {
+  readonly entity: CreateEntityInput
+  readonly primaryAlias: CreateEntityAliasInput
+  readonly creationEvent: CreateResolutionEventInput
+  readonly mentionId: string
+  /** Timestamp applied when open review candidates are closed by the assignment. */
+  readonly resolvedAt: number
+  readonly assignmentEvent: CreateResolutionEventInput
+}
+
+export interface CreatedEntityWithAssignment {
+  readonly entity: Entity
+  readonly primaryAlias: EntityAlias
+  readonly mention: Mention
 }
 
 export interface AddEntityConstraintInput {
@@ -1628,6 +1669,13 @@ export class EntityResolutionRepository {
       if (mentionRow === undefined) throw new Error('Mention was not found')
       const entityRow = transaction.select().from(entities).where(eq(entities.id, input.entityId)).get()
       if (entityRow === undefined) throw new Error('Entity was not found')
+      const documentRow = transaction
+        .select({ parseStatus: documents.parseStatus })
+        .from(documents)
+        .where(eq(documents.id, mentionRow.documentId))
+        .get()
+      if (documentRow === undefined) throw new Error('Mention Document was not found')
+      assertDocumentReviewMutable(documentRow.parseStatus)
 
       const mention = toMention(mentionRow)
       const assigned = assignMentionToEntity(mention, toEntity(entityRow))
@@ -1656,9 +1704,11 @@ export class EntityResolutionRepository {
         throw new Error('Resolution event must belong to the Mention Matter')
       }
 
+      // A new assignment restarts review: the confirmation state must always
+      // bind to the current Entity, never to a superseded assignment.
       const result = transaction
         .update(mentions)
-        .set({ entityId: assigned.entityId })
+        .set({ entityId: assigned.entityId, reviewStatus: 'UNREVIEWED' })
         .where(eq(mentions.id, input.mentionId))
         .run()
       if (result.changes !== 1) throw new Error('Mention state changed before assignment')
@@ -1720,6 +1770,208 @@ export class EntityResolutionRepository {
       const updated = transaction.select().from(mentions).where(eq(mentions.id, input.mentionId)).get()
       if (updated === undefined) throw new Error('Assigned Mention was not found')
       return toMention(updated)
+    })
+  }
+
+  /**
+   * Records the USER confirmation of a Mention's current assignment. Confirming
+   * the same assignment again is an idempotent no-op: the audit trail keeps
+   * exactly one ENTITY_CONFIRMED event per confirmed assignment.
+   */
+  confirmMention(input: ConfirmMentionInput): Mention {
+    if (input.event.type !== 'ENTITY_CONFIRMED') {
+      throw new Error('Resolution event type must be ENTITY_CONFIRMED')
+    }
+    // This entry point records user decisions only; SYSTEM confirmations are
+    // not part of the V1 workflow.
+    if (input.event.actor !== 'USER') {
+      throw new Error('Confirmation events must be recorded by the USER actor')
+    }
+    return this.db.transaction((transaction) => {
+      const mentionRow = transaction.select().from(mentions).where(eq(mentions.id, input.mentionId)).get()
+      if (mentionRow === undefined) throw new Error('Mention was not found')
+      const documentRow = transaction
+        .select({ parseStatus: documents.parseStatus })
+        .from(documents)
+        .where(eq(documents.id, mentionRow.documentId))
+        .get()
+      if (documentRow === undefined) throw new Error('Mention Document was not found')
+      assertDocumentReviewMutable(documentRow.parseStatus)
+
+      const mention = toMention(mentionRow)
+      const confirmed = confirmMentionAssignment(mention)
+      // The audit event must bind to the actual assignment it confirms.
+      if (input.event.mentionId !== input.mentionId) {
+        throw new Error('Resolution event must reference the confirmed Mention')
+      }
+      if (input.event.entityId !== mention.entityId) {
+        throw new Error('Resolution event must reference the confirmed Entity')
+      }
+      if (input.event.matterId !== mentionRow.matterId) {
+        throw new Error('Resolution event must belong to the Mention Matter')
+      }
+
+      // Confirming an already-confirmed assignment is a no-op, not a
+      // transition: recording another event would fabricate audit history.
+      if (mention.reviewStatus === 'CONFIRMED') return mention
+
+      const result = transaction
+        .update(mentions)
+        .set({ reviewStatus: confirmed.reviewStatus })
+        .where(eq(mentions.id, input.mentionId))
+        .run()
+      if (result.changes !== 1) throw new Error('Mention state changed before confirmation')
+
+      transaction.insert(resolutionEvents).values(toResolutionEventInsert(input.event)).run()
+
+      const updated = transaction.select().from(mentions).where(eq(mentions.id, input.mentionId)).get()
+      if (updated === undefined) throw new Error('Confirmed Mention was not found')
+      return toMention(updated)
+    })
+  }
+
+  /**
+   * Persists a user-created Entity together with the Mention assignment that
+   * motivated it, atomically. The mention-side mutation follows assignMention
+   * exactly: ProtectedValue link, assignment event, candidate closure.
+   */
+  createEntityWithAssignment(input: CreateEntityWithAssignmentInput): CreatedEntityWithAssignment {
+    const { entity, primaryAlias, creationEvent, assignmentEvent } = input
+    assertEntity(entity)
+    assertEntityAlias(primaryAlias)
+    assertSameMatter(entity, primaryAlias, 'entity and primary alias')
+    if (entity.status !== 'ACTIVE') throw new Error('a newly created Entity must be active')
+    if (primaryAlias.entityId !== entity.id || primaryAlias.aliasType !== 'PRIMARY' || !primaryAlias.isPrimary) {
+      throw new Error('primary alias must identify the newly created Entity')
+    }
+    if (creationEvent.type !== 'ENTITY_CREATED' || creationEvent.entityId !== entity.id) {
+      throw new Error('creation event must identify the newly created Entity')
+    }
+    if (creationEvent.mentionId !== undefined) {
+      throw new Error('creation event must not reference a Mention')
+    }
+    if (creationEvent.matterId !== entity.matterId) {
+      throw new Error('creation event must belong to the Entity Matter')
+    }
+    // This entry point records user decisions only; SYSTEM entity creation is
+    // produced by resolution completion.
+    if (creationEvent.actor !== 'USER' || assignmentEvent.actor !== 'USER') {
+      throw new Error('Manual creation and assignment events must be recorded by the USER actor')
+    }
+    if (assignmentEvent.entityId !== entity.id) {
+      throw new Error('Resolution event must reference the assigned Entity')
+    }
+    if (assignmentEvent.mentionId !== input.mentionId) {
+      throw new Error('Resolution event must reference the assigned Mention')
+    }
+
+    return this.db.transaction((transaction) => {
+      const mentionRow = transaction.select().from(mentions).where(eq(mentions.id, input.mentionId)).get()
+      if (mentionRow === undefined) throw new Error('Mention was not found')
+      if (mentionRow.matterId !== entity.matterId) {
+        throw new Error('Mention must belong to the Entity Matter')
+      }
+      if (assignmentEvent.matterId !== mentionRow.matterId) {
+        throw new Error('Resolution event must belong to the Mention Matter')
+      }
+      const documentRow = transaction
+        .select({ parseStatus: documents.parseStatus })
+        .from(documents)
+        .where(eq(documents.id, mentionRow.documentId))
+        .get()
+      if (documentRow === undefined) throw new Error('Mention Document was not found')
+      assertDocumentReviewMutable(documentRow.parseStatus)
+      const mention = toMention(mentionRow)
+      const assigned = assignMentionToEntity(mention, entity)
+      const expectedType = mention.entityId === undefined ? 'MENTION_ASSIGNED' : 'MENTION_REASSIGNED'
+      if (assignmentEvent.type !== expectedType) {
+        throw new Error('Resolution event type must match the Mention assignment transition')
+      }
+
+      transaction
+        .insert(entities)
+        .values({
+          id: entity.id,
+          matterId: entity.matterId,
+          entityType: entity.type,
+          publicToken: entity.publicToken,
+          status: entity.status,
+          ...(entity.resolutionConfidence === undefined
+            ? {}
+            : { resolutionConfidence: entity.resolutionConfidence }),
+          createdAt: entity.createdAt,
+          updatedAt: entity.updatedAt
+        })
+        .run()
+      transaction.insert(entityAliases).values(primaryAlias).run()
+      transaction.insert(resolutionEvents).values(toResolutionEventInsert(creationEvent)).run()
+
+      // A new assignment restarts review: the confirmation state must always
+      // bind to the current Entity, never to a superseded assignment.
+      const result = transaction
+        .update(mentions)
+        .set({ entityId: assigned.entityId, reviewStatus: 'UNREVIEWED' })
+        .where(eq(mentions.id, input.mentionId))
+        .run()
+      if (result.changes !== 1) throw new Error('Mention state changed before assignment')
+
+      // Attach the Mention's ProtectedValue to the Entity so later fingerprint
+      // lookups find the confirmed identity; the link is idempotent.
+      if (mentionRow.protectedValueId !== null) {
+        const existingLink = transaction
+          .select({ entityId: entityProtectedValues.entityId })
+          .from(entityProtectedValues)
+          .where(
+            and(
+              eq(entityProtectedValues.entityId, entity.id),
+              eq(entityProtectedValues.protectedValueId, mentionRow.protectedValueId)
+            )
+          )
+          .get()
+        if (existingLink === undefined) {
+          transaction
+            .insert(entityProtectedValues)
+            .values({
+              entityId: entity.id,
+              protectedValueId: mentionRow.protectedValueId,
+              relationshipType: 'OWNER',
+              confidence: 1,
+              isPrimary: true,
+              createdAt: input.resolvedAt
+            })
+            .run()
+        }
+      }
+
+      transaction.insert(resolutionEvents).values(toResolutionEventInsert(assignmentEvent)).run()
+
+      // A user decision closes every open review candidate for the Mention.
+      transaction
+        .update(resolutionCandidates)
+        .set({ state: 'ACCEPTED', resolvedAt: input.resolvedAt })
+        .where(
+          and(
+            eq(resolutionCandidates.mentionId, input.mentionId),
+            eq(resolutionCandidates.candidateEntityId, entity.id),
+            eq(resolutionCandidates.state, 'PENDING')
+          )
+        )
+        .run()
+      transaction
+        .update(resolutionCandidates)
+        .set({ state: 'REJECTED', resolvedAt: input.resolvedAt })
+        .where(
+          and(
+            eq(resolutionCandidates.mentionId, input.mentionId),
+            ne(resolutionCandidates.candidateEntityId, entity.id),
+            eq(resolutionCandidates.state, 'PENDING')
+          )
+        )
+        .run()
+
+      const updated = transaction.select().from(mentions).where(eq(mentions.id, input.mentionId)).get()
+      if (updated === undefined) throw new Error('Assigned Mention was not found')
+      return { entity, primaryAlias, mention: toMention(updated) }
     })
   }
 

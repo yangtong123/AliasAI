@@ -107,7 +107,6 @@ export async function initializeRuntime(app: AppLike, safeStorage: SafeStorage):
     reviewQuery,
     reviewOperations: new ReviewOperationService(
       new EntityResolutionService(resolutionRepository, new ProtectedValueRepository(db), entities, keys),
-      new EntityService(entities, keys),
       reviewQuery
     ),
     preview: new SanitizedPreviewService(

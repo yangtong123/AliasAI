@@ -13,6 +13,7 @@ import {
   assignMentionToEntity,
   canonicalizeEntityConstraint,
   canonicalizeEntityPair,
+  confirmMentionAssignment,
   mergeEntity
 } from '../src/index'
 import type { Document, Entity, Mention, SanitizationMapping, SanitizedBlock, SanitizedDocument } from '../src/index'
@@ -180,6 +181,14 @@ describe('domain invariants', () => {
     expect(() => assignMentionToEntity(mention, { ...activeEntity, matterId: 'matter-2' })).toThrow(
       'mention and entity must belong to the same Matter'
     )
+  })
+
+  it('confirms only an assigned Mention and marks it reviewed', () => {
+    const unassigned: Mention = { ...mention, reviewStatus: 'UNREVIEWED' }
+    expect(() => confirmMentionAssignment(unassigned)).toThrow('only an assigned mention can be confirmed')
+
+    const assigned = assignMentionToEntity(unassigned, activeEntity)
+    expect(confirmMentionAssignment(assigned)).toMatchObject({ entityId: 'entity-a', reviewStatus: 'CONFIRMED' })
   })
 
   it('requires every merged Entity to retain a redirect', () => {

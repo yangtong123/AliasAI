@@ -288,6 +288,19 @@ export function assignMentionToEntity(mention: Mention, entity: Entity): Mention
   return { ...mention, entityId: entity.id }
 }
 
+/**
+ * Marks a Mention's current assignment as reviewed. Confirmation requires an
+ * assignment; it never assigns, so the Mention's entityId is left untouched.
+ */
+export function confirmMentionAssignment(mention: Mention): Mention {
+  assertMention(mention)
+  if (mention.entityId === undefined) {
+    throw new DomainInvariantError('only an assigned mention can be confirmed')
+  }
+
+  return { ...mention, reviewStatus: 'CONFIRMED' }
+}
+
 /** Public tokens are immutable after creation, even when aliases or status change. */
 export function assertPublicTokenUnchanged(previous: Entity, next: Entity): void {
   if (previous.id !== next.id) {

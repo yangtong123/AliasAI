@@ -12,6 +12,7 @@ import {
 import type {
   Document,
   Entity,
+  EntityAlias,
   EntityConstraint,
   EntityType,
   Mention,
@@ -583,6 +584,125 @@ export class EntityResolutionService {
       }
     } catch (error) {
       throw new EntityResolutionError('ASSIGNMENT_FAILED', 'Mention assignment failed', { cause: error })
+    }
+  }
+
+  /** Records a USER confirmation of a Mention's current assignment. */
+  confirm(mentionId: string): Mention {
+    try {
+      const mention = this.resolution.findMentionById(mentionId)
+      if (mention === undefined) throw new Error('Mention was not found')
+      const createdAt = this.now()
+      const eventId = this.generateId(createdAt)
+      const payloadBytes = Buffer.from(JSON.stringify({ entityId: mention.entityId ?? null }), 'utf8')
+      let payloadCipher: Buffer
+      try {
+        payloadCipher = encrypt(payloadBytes, this.keys.persistenceKey, resolutionEventContext(eventId))
+      } finally {
+        payloadBytes.fill(0)
+      }
+      try {
+        return this.resolution.confirmMention({
+          mentionId,
+          event: {
+            id: eventId,
+            matterId: mention.matterId,
+            type: 'ENTITY_CONFIRMED',
+            ...(mention.entityId === undefined ? {} : { entityId: mention.entityId }),
+            mentionId,
+            actor: 'USER',
+            payloadCipher,
+            createdAt
+          }
+        })
+      } finally {
+        payloadCipher.fill(0)
+      }
+    } catch (error) {
+      throw new EntityResolutionError('CONFIRMATION_FAILED', 'Mention confirmation failed', { cause: error })
+    }
+  }
+
+  /** Creates a USER-actor Entity and assigns the Mention to it in a single transaction. */
+  createEntityWithAssignment(
+    mentionId: string,
+    input: { readonly primaryAlias: string; readonly entityType: EntityType }
+  ): { readonly entity: Entity; readonly primaryAlias: EntityAlias; readonly mention: Mention } {
+    if (input.primaryAlias.trim().length === 0) throw new Error('Primary alias must not be empty')
+    try {
+      const mention = this.resolution.findMentionById(mentionId)
+      if (mention === undefined) throw new Error('Mention was not found')
+      const createdAt = this.now()
+      const entity: Entity = {
+        id: this.generateId(createdAt),
+        matterId: mention.matterId,
+        type: input.entityType,
+        publicToken: generatePublicToken(input.entityType),
+        status: 'ACTIVE',
+        createdAt,
+        updatedAt: createdAt
+      }
+      const primaryAlias: EntityAlias = {
+        id: this.generateId(createdAt),
+        matterId: mention.matterId,
+        entityId: entity.id,
+        alias: input.primaryAlias,
+        aliasType: 'PRIMARY',
+        isPrimary: true,
+        createdAt
+      }
+      const creationEventId = this.generateId(createdAt)
+      const creationPayloadBytes = Buffer.from('{}', 'utf8')
+      let creationPayloadCipher: Buffer
+      try {
+        creationPayloadCipher = encrypt(creationPayloadBytes, this.keys.persistenceKey, resolutionEventContext(creationEventId))
+      } finally {
+        creationPayloadBytes.fill(0)
+      }
+      const assignmentEventId = this.generateId(createdAt)
+      const assignmentPayloadBytes = Buffer.from(JSON.stringify({ entityId: entity.id }), 'utf8')
+      let assignmentPayloadCipher: Buffer
+      try {
+        assignmentPayloadCipher = encrypt(
+          assignmentPayloadBytes,
+          this.keys.persistenceKey,
+          resolutionEventContext(assignmentEventId)
+        )
+      } finally {
+        assignmentPayloadBytes.fill(0)
+      }
+      try {
+        return this.resolution.createEntityWithAssignment({
+          entity,
+          primaryAlias,
+          creationEvent: {
+            id: creationEventId,
+            matterId: mention.matterId,
+            type: 'ENTITY_CREATED',
+            entityId: entity.id,
+            actor: 'USER',
+            payloadCipher: creationPayloadCipher,
+            createdAt
+          },
+          mentionId,
+          resolvedAt: createdAt,
+          assignmentEvent: {
+            id: assignmentEventId,
+            matterId: mention.matterId,
+            type: mention.entityId === undefined ? 'MENTION_ASSIGNED' : 'MENTION_REASSIGNED',
+            entityId: entity.id,
+            mentionId,
+            actor: 'USER',
+            payloadCipher: assignmentPayloadCipher,
+            createdAt
+          }
+        })
+      } finally {
+        creationPayloadCipher.fill(0)
+        assignmentPayloadCipher.fill(0)
+      }
+    } catch (error) {
+      throw new EntityResolutionError('ASSIGNMENT_FAILED', 'Entity creation and assignment failed', { cause: error })
     }
   }
 
