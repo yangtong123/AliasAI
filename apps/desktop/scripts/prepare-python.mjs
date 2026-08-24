@@ -111,7 +111,16 @@ async function stampContents(arch, pin) {
   const workers = await Promise.all(
     WORKER_FILES.map(async (file) => `${file}:${await sha256(await readFile(join(repositoryRoot, 'python', 'document_parser', file)))}`)
   )
-  return [`arch=${arch}`, `archive=${pin.sha256}`, `lock=${await sha256(lockData)}`, `workers=${workers.join(',')}`].join('\n')
+  // The provisioning recipe itself counts too: changing pip flags, pruning
+  // rules, or the assembly flow must invalidate an existing cache.
+  const recipe = await sha256(await readFile(fileURLToPath(import.meta.url)))
+  return [
+    `arch=${arch}`,
+    `archive=${pin.sha256}`,
+    `lock=${await sha256(lockData)}`,
+    `workers=${workers.join(',')}`,
+    `recipe=${recipe}`
+  ].join('\n')
 }
 
 async function provision(staging, archivePath) {

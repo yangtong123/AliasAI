@@ -62,11 +62,13 @@ feature and would require shipping the PaddleOCR stack.
   it stayed byte-identical.
 
 Provisioning is guarded by a single global stamp covering every input —
-architecture, archive checksum, requirements-lock checksum, and worker source
-checksums — and the runtime/workers directories are swapped in atomically
-from a staging directory only after provisioning fully succeeded. Switching
-architectures or editing a worker always reprovisions; a failed run never
-leaves mixed output.
+architecture, archive checksum, requirements-lock checksum, worker source
+checksums, and a hash of the provisioning script itself (so changing pip
+flags, pruning rules, or the assembly flow also invalidates the cache) — and
+the runtime/workers directories are swapped in atomically from a staging
+directory only after provisioning fully succeeded. Switching architectures
+or editing a worker always reprovisions; a failed run never leaves mixed
+output.
 
 Bumping a pin means updating the constants at the top of the script and/or
 the lock file (the stamp invalidates automatically). To regenerate the lock,
@@ -106,9 +108,16 @@ AliasAI.app/Contents/MacOS/AliasAI --self-test
 
 - **Audit** fails the build on forbidden content (test files, mock worker,
   `.venv`, databases, key material, standalone or inline source maps —
-  including inside `app.asar` — and embedded repository paths) and on missing
-  required pieces (bundled interpreter, worker sources, migrations, native
-  SQLite binding).
+  including inside `app.asar` — and embedded build-machine paths) and on
+  missing required pieces (bundled interpreter, worker sources, migrations,
+  native SQLite binding). Path scanning uses the actual repository root plus
+  common CI workspace locations; third-party wheel SBOMs under
+  `.dist-info/sboms/` are exempt because they legitimately reference the
+  vendor's own CI and are hash-locked.
+- **Manifest** (`--record-manifest` / `--check-manifest`) fingerprints every
+  bundle entry (path, type, permissions, sha256; symlinks by target) and
+  compares strictly, proving a run did not mutate the bundle at all — not
+  merely that it still satisfies the audit rules.
 - **Self-test** runs the complete user acceptance chain against the packaged
   binary in a throwaway `userData` directory: create Matter → import a
   synthetic PDF → parse (through the bundled Python worker) → detect →
@@ -116,11 +125,11 @@ AliasAI.app/Contents/MacOS/AliasAI --self-test
   JSON stage summary and exits non-zero on any failure. On machines without
   an interactive keychain (CI), run it with `ALIASAI_ALLOW_PLAINTEXT_KEYS=1`.
 
-Both gates run in CI for every push to `main` and on pull requests that touch
+All gates run in CI for every push to `main` and on pull requests that touch
 the app, packages, or worker sources
 (`.github/workflows/packaging.yml`, `macos-15` arm64 + `macos-15-intel` x64
-matrix). The audit runs a second time **after** the self-test to prove the
-run did not mutate the bundle, and the zips are uploaded as artifacts.
+matrix): audit → manifest record → self-test → strict manifest re-check, and
+the zips are uploaded as artifacts.
 
 ## User data, upgrades, and troubleshooting
 

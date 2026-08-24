@@ -42,17 +42,17 @@ jobs:
       - name: Package the app (unpacked + zip)
         run: pnpm --filter @aliasai/desktop package:${{ matrix.arch }}
       - name: Audit package contents
-        run: node apps/desktop/scripts/audit-package.mjs
+        run: node apps/desktop/scripts/audit-package.mjs --record-manifest apps/desktop/release/bundle-manifest.txt
       - name: Self-test the packaged app
         env:
           # CI runners have no interactive keychain; the self-test only needs
           # deterministic local encryption for its throwaway data directory.
           ALIASAI_ALLOW_PLAINTEXT_KEYS: '1'
         run: apps/desktop/release/mac*/AliasAI.app/Contents/MacOS/AliasAI --self-test
-      - name: Audit again after the self-test
-        # The self-test must not mutate the bundle (bytecode caches, logs,
-        # temp files): audit runs a second time on the exercised app.
-        run: node apps/desktop/scripts/audit-package.mjs
+      - name: Verify the bundle is byte-identical after the self-test
+        # The manifest (path, type, permissions, sha256 per file) is compared
+        # strictly, so any mutation — not only rule violations — fails here.
+        run: node apps/desktop/scripts/audit-package.mjs --check-manifest apps/desktop/release/bundle-manifest.txt
       - uses: actions/upload-artifact@v4
         with:
           name: AliasAI-macos-${{ matrix.arch }}
