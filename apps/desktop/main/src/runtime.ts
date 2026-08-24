@@ -16,6 +16,7 @@ import {
   ReviewOperationService,
   ReviewQueryService,
   SanitizedPreviewService,
+  StartupRecoveryService,
   type ApplicationKeys
 } from '@aliasai/application'
 import {
@@ -28,6 +29,7 @@ import {
   ProtectedValueRepository,
   ReviewQueryRepository,
   SanitizationRepository,
+  StartupRecoveryRepository,
   migrateDatabase,
   openDatabase
 } from '@aliasai/database'
@@ -74,6 +76,7 @@ export async function initializeRuntime(app: AppLike, safeStorage: SafeStorage):
   migrateDatabase(connection.db, resolveMigrationsFolder())
 
   const { sqlite, db } = connection
+  new StartupRecoveryService(new StartupRecoveryRepository(db), keys).recover()
   const documents = new DocumentRepository(db)
   const entities = new EntityRepository(db)
   const resolutionRepository = new EntityResolutionRepository(db)
@@ -129,8 +132,14 @@ export async function initializeRuntime(app: AppLike, safeStorage: SafeStorage):
     ai: new AiExecutionService(new AiExecutionRepository(db), rehydration, new MockAiProvider(), keys)
   }
 
-  const close = () => sqlite.close()
-  process.on('exit', close)
+  let closed = false
+  const close = () => {
+    if (closed) return
+    closed = true
+    process.off('exit', close)
+    sqlite.close()
+  }
+  process.once('exit', close)
   return { keys, services, close }
 }
 

@@ -11,9 +11,9 @@ type Stage = {
 }
 
 const STAGES: readonly Stage[] = [
-  { label: 'Parse', channel: 'document:process', enabledFrom: ['IMPORTED', 'FAILED'] },
-  { label: 'Detect', channel: 'document:detect', enabledFrom: ['PARSED', 'FAILED'] },
-  { label: 'Resolve', channel: 'document:resolve', enabledFrom: ['DETECTED', 'FAILED'] }
+  { label: 'Parse', channel: 'document:process', enabledFrom: ['IMPORTED'] },
+  { label: 'Detect', channel: 'document:detect', enabledFrom: ['PARSED'] },
+  { label: 'Resolve', channel: 'document:resolve', enabledFrom: ['DETECTED'] }
 ]
 
 export function PipelineControls(props: {
@@ -22,7 +22,7 @@ export function PipelineControls(props: {
   readonly jobs: readonly JobSummaryDTO[]
   readonly onChanged: () => void
 }) {
-  const current = STAGES.find((stage) => stage.enabledFrom.includes(props.parseStatus))
+  const current = selectStage(props.parseStatus, props.jobs)
   const run = useMutation((channel: Stage['channel']) => invoke(channel, { documentId: props.documentId }))
 
   const onRun = () => {
@@ -43,7 +43,7 @@ export function PipelineControls(props: {
       </ol>
       {current !== undefined ? (
         <button type="button" onClick={onRun} disabled={run.pending}>
-          Run {current.label}
+          {props.parseStatus === 'FAILED' ? 'Retry' : 'Run'} {current.label}
         </button>
       ) : (
         <p className="empty">Pipeline idle</p>
@@ -56,4 +56,17 @@ export function PipelineControls(props: {
       {run.error !== null && <p className="error">{run.error.message}</p>}
     </section>
   )
+}
+
+function selectStage(parseStatus: DocumentParseStatus, jobs: readonly JobSummaryDTO[]): Stage | undefined {
+  if (parseStatus !== 'FAILED') return STAGES.find((stage) => stage.enabledFrom.includes(parseStatus))
+  const failedJob = [...jobs]
+    .filter((job) => job.status === 'FAILED' || job.status === 'CANCELLED')
+    .sort((left, right) => right.createdAt - left.createdAt)[0]
+  if (failedJob?.type === 'DETECT') return STAGES[1]
+  if (failedJob?.type === 'RESOLVE') return STAGES[2]
+  // PARSE does not create a ProcessingJob yet. With no failed downstream job,
+  // FAILED therefore belongs to parsing. SANITIZE retries from Preview.
+  if (failedJob === undefined || failedJob.type === 'PARSE' || failedJob.type === 'OCR') return STAGES[0]
+  return undefined
 }

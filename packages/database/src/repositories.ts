@@ -2801,3 +2801,124 @@ export class AiExecutionRepository {
     })
   }
 }
+
+export interface InterruptedWork {
+  readonly processingJobs: readonly { readonly id: string; readonly startedAt: number }[]
+  readonly aiExecutions: readonly { readonly id: string; readonly startedAt: number }[]
+  readonly documents: readonly { readonly id: string; readonly updatedAt: number }[]
+}
+
+export interface RecoverInterruptedWorkInput {
+  readonly finishedAt: number
+  readonly processingJobs: readonly { readonly id: string; readonly errorCipher: Buffer }[]
+  readonly aiExecutions: readonly { readonly id: string; readonly errorCipher: Buffer }[]
+}
+
+/** Atomically turns crash-left RUNNING work into retryable FAILED state. */
+export class StartupRecoveryRepository {
+  constructor(private readonly db: AliasAiDatabase) {}
+
+  findInterrupted(): InterruptedWork {
+    const processing = this.db
+      .select({ id: processingJobs.id, startedAt: processingJobs.startedAt })
+      .from(processingJobs)
+      .where(eq(processingJobs.status, 'RUNNING'))
+      .all()
+      .map((row) => {
+        if (row.startedAt === null) throw new Error('Running ProcessingJob is missing startedAt')
+        return { id: row.id, startedAt: row.startedAt }
+      })
+    const ai = this.db
+      .select({ id: aiExecutions.id, startedAt: aiExecutions.startedAt })
+      .from(aiExecutions)
+      .where(eq(aiExecutions.status, 'RUNNING'))
+      .all()
+    const interruptedDocuments = this.db
+      .select({ id: documents.id, updatedAt: documents.updatedAt })
+      .from(documents)
+      .where(inArray(documents.parseStatus, ['PARSING', 'DETECTING', 'RESOLVING', 'SANITIZING']))
+      .all()
+    return { processingJobs: processing, aiExecutions: ai, documents: interruptedDocuments }
+  }
+
+  recover(input: RecoverInterruptedWorkInput): { readonly processingJobs: number; readonly aiExecutions: number; readonly documents: number } {
+    if (!Number.isSafeInteger(input.finishedAt) || input.finishedAt < 0) {
+      throw new Error('Recovery finishedAt must be a non-negative safe integer')
+    }
+    assertUniqueRecoveryCiphers(input.processingJobs, 'ProcessingJob')
+    assertUniqueRecoveryCiphers(input.aiExecutions, 'AI execution')
+    return this.db.transaction((transaction) => {
+      const runningJobs = transaction
+        .select({ id: processingJobs.id })
+        .from(processingJobs)
+        .where(eq(processingJobs.status, 'RUNNING'))
+        .all()
+      const runningAi = transaction
+        .select({ id: aiExecutions.id })
+        .from(aiExecutions)
+        .where(eq(aiExecutions.status, 'RUNNING'))
+        .all()
+      if (!sameIds(runningJobs, input.processingJobs) || !sameIds(runningAi, input.aiExecutions)) {
+        throw new Error('Interrupted work changed before recovery')
+      }
+
+      for (const job of input.processingJobs) {
+        const result = transaction
+          .update(processingJobs)
+          .set({ status: 'FAILED', errorCipher: job.errorCipher, finishedAt: input.finishedAt })
+          .where(and(eq(processingJobs.id, job.id), eq(processingJobs.status, 'RUNNING')))
+          .run()
+        if (result.changes !== 1) throw new Error('Interrupted ProcessingJob could not be recovered')
+      }
+      for (const execution of input.aiExecutions) {
+        const result = transaction
+          .update(aiExecutions)
+          .set({ status: 'FAILED', errorCipher: execution.errorCipher, finishedAt: input.finishedAt })
+          .where(and(eq(aiExecutions.id, execution.id), eq(aiExecutions.status, 'RUNNING')))
+          .run()
+        if (result.changes !== 1) throw new Error('Interrupted AI execution could not be recovered')
+      }
+
+      const interruptedDocuments = transaction
+        .select({ id: documents.id, parseStatus: documents.parseStatus })
+        .from(documents)
+        .where(inArray(documents.parseStatus, ['PARSING', 'DETECTING', 'RESOLVING', 'SANITIZING']))
+        .all()
+      for (const document of interruptedDocuments) {
+        const result = transaction
+          .update(documents)
+          .set({
+            parseStatus: 'FAILED',
+            updatedAt: input.finishedAt,
+            ...(document.parseStatus === 'PARSING' ? { pageCount: null } : {})
+          })
+          .where(eq(documents.id, document.id))
+          .run()
+        if (result.changes !== 1) throw new Error('Interrupted Document could not be recovered')
+      }
+      return {
+        processingJobs: input.processingJobs.length,
+        aiExecutions: input.aiExecutions.length,
+        documents: interruptedDocuments.length
+      }
+    })
+  }
+}
+
+function assertUniqueRecoveryCiphers(rows: readonly { readonly id: string; readonly errorCipher: Buffer }[], label: string): void {
+  const ids = new Set<string>()
+  for (const row of rows) {
+    if (ids.has(row.id)) throw new Error(`${label} recovery IDs must be unique`)
+    if (row.errorCipher.length === 0) throw new Error(`${label} recovery errorCipher must not be empty`)
+    ids.add(row.id)
+  }
+}
+
+function sameIds(
+  current: readonly { readonly id: string }[],
+  submitted: readonly { readonly id: string }[]
+): boolean {
+  if (current.length !== submitted.length) return false
+  const submittedIds = new Set(submitted.map((row) => row.id))
+  return current.every((row) => submittedIds.has(row.id))
+}

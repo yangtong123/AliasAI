@@ -20,8 +20,7 @@ import type { EntityConstraintType, EntityType } from '@aliasai/domain'
 export interface AliasAiInvokeMap {
   'matter:list': { request: Record<string, never>; response: readonly MatterSummaryDTO[] }
   'matter:create': { request: { name: string }; response: MatterSummaryDTO }
-  'dialog:pickPdf': { request: Record<string, never>; response: { filePath: string | null } }
-  'document:import': { request: { matterId: string; filePath: string }; response: DocumentSummaryDTO }
+  'document:pickAndImport': { request: { matterId: string }; response: DocumentSummaryDTO | null }
   'document:list': { request: { matterId: string }; response: readonly DocumentSummaryDTO[] }
   'document:get': {
     request: { documentId: string }
@@ -62,6 +61,14 @@ export interface AliasAiInvokeMap {
     request: { sanitizedDocumentId: string; text: string; includeRestoreOnRequest?: boolean }
     response: RehydrationResult
   }
+  'preview:copySanitized': {
+    request: { documentId: string; sanitizedDocumentId: string }
+    response: { copied: true }
+  }
+  'preview:exportSanitized': {
+    request: { documentId: string; sanitizedDocumentId: string }
+    response: { saved: boolean }
+  }
   'ai:execute': {
     request: { sanitizedDocumentId: string; includeRestoreOnRequest?: boolean }
     response: Extract<AiExecutionView, { status: 'COMPLETED' }>
@@ -69,6 +76,14 @@ export interface AliasAiInvokeMap {
   'ai:latest': {
     request: { sanitizedDocumentId: string; includeRestoreOnRequest?: boolean }
     response: AiExecutionView | null
+  }
+  'ai:copyResult': {
+    request: { executionId: string; variant: 'SANITIZED' | 'REHYDRATED'; includeRestoreOnRequest?: boolean }
+    response: { copied: true }
+  }
+  'ai:exportResult': {
+    request: { executionId: string; variant: 'SANITIZED' | 'REHYDRATED'; includeRestoreOnRequest?: boolean }
+    response: { saved: boolean }
   }
 }
 
@@ -78,8 +93,7 @@ export type AliasAiChannel = keyof AliasAiInvokeMap & string
 export const ALIASAI_CHANNELS: readonly AliasAiChannel[] = [
   'matter:list',
   'matter:create',
-  'dialog:pickPdf',
-  'document:import',
+  'document:pickAndImport',
   'document:list',
   'document:get',
   'document:process',
@@ -93,6 +107,10 @@ export const ALIASAI_CHANNELS: readonly AliasAiChannel[] = [
   'preview:get',
   'preview:generate',
   'preview:rehydrate',
+  'preview:copySanitized',
+  'preview:exportSanitized',
   'ai:execute',
-  'ai:latest'
+  'ai:latest',
+  'ai:copyResult',
+  'ai:exportResult'
 ]

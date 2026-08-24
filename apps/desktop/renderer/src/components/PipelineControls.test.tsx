@@ -30,6 +30,43 @@ describe('PipelineControls', () => {
     expect(screen.getByRole('button', { name: 'Run Parse' })).toBeDefined()
   })
 
+  it.each([
+    ['DETECT', 'Retry Detect'],
+    ['RESOLVE', 'Retry Resolve']
+  ] as const)('retries the failed downstream %s stage instead of incorrectly reparsing', (type, label) => {
+    render(
+      <PipelineControls
+        documentId="document-1"
+        parseStatus="FAILED"
+        jobs={[{ type, status: 'FAILED', progress: 0.5, createdAt: 10 }]}
+        onChanged={() => {}}
+      />
+    )
+
+    expect(screen.getByRole('button', { name: label })).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Retry Parse' })).toBeNull()
+  })
+
+  it('leaves a failed sanitization retry to the preview workflow', () => {
+    render(
+      <PipelineControls
+        documentId="document-1"
+        parseStatus="FAILED"
+        jobs={[{ type: 'SANITIZE', status: 'FAILED', progress: 0.5, createdAt: 10 }]}
+        onChanged={() => {}}
+      />
+    )
+
+    expect(screen.getByText('Pipeline idle')).toBeDefined()
+    expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull()
+  })
+
+  it('retries parsing when FAILED has no downstream job', () => {
+    render(<PipelineControls documentId="document-1" parseStatus="FAILED" jobs={[]} onChanged={() => {}} />)
+
+    expect(screen.getByRole('button', { name: 'Retry Parse' })).toBeDefined()
+  })
+
   it('runs the gated stage and reports the running job progress', async () => {
     invoke.mockResolvedValueOnce({ ok: true, data: { document: {}, jobs: [] } })
     const onChanged = vi.fn()

@@ -7,7 +7,7 @@ export function MatterList(props: {
   readonly matters: readonly MatterSummaryDTO[]
   readonly selectedMatterId: string | null
   readonly onSelect: (matterId: string) => void
-  readonly onCreated: () => void
+  readonly onCreated: (matterId: string) => void
 }) {
   const [name, setName] = useState('')
   const create = useMutation((value: string) => invoke('matter:create', { name: value }))
@@ -36,7 +36,7 @@ export function MatterList(props: {
           void create.run(name).then((created) => {
             if (created !== null) {
               setName('')
-              props.onCreated()
+              props.onCreated(created.id)
             }
           })
         }}

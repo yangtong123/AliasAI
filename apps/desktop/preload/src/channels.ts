@@ -5,8 +5,7 @@
 export const CHANNELS = [
   'matter:list',
   'matter:create',
-  'dialog:pickPdf',
-  'document:import',
+  'document:pickAndImport',
   'document:list',
   'document:get',
   'document:process',
@@ -20,8 +19,12 @@ export const CHANNELS = [
   'preview:get',
   'preview:generate',
   'preview:rehydrate',
+  'preview:copySanitized',
+  'preview:exportSanitized',
   'ai:execute',
-  'ai:latest'
+  'ai:latest',
+  'ai:copyResult',
+  'ai:exportResult'
 ] as const
 
 export type Channel = (typeof CHANNELS)[number]

@@ -1,8 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage } from 'electron'
+import { writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { initializeRuntime, type AliasAiRuntime } from './runtime'
 import { runSelfTest } from './self-test'
+import { runUiSelfTest } from './ui-self-test'
 import { createHandlerRegistry } from './ipc/handlers'
 import { registerIpcHandlers } from './ipc/register'
 
@@ -23,6 +25,25 @@ if (process.argv.includes('--self-test')) {
     } catch (error) {
       // Sanitized: static stage messages only, never values or paths.
       console.error(JSON.stringify({ status: 'FAILED', message: error instanceof Error ? error.message : 'unknown failure' }))
+      app.exit(1)
+    }
+  })
+} else if (process.argv.includes('--ui-self-test')) {
+  // Real desktop acceptance mode: creates a BrowserWindow and drives the
+  // production React -> preload -> IPC -> application stack with synthetic
+  // data in a throwaway userData directory.
+  void app.whenReady().then(async () => {
+    try {
+      const result = await runUiSelfTest(app, safeStorage, createWindow)
+      console.log(JSON.stringify({ status: 'PASSED', stages: result.stages }))
+      app.exit(0)
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          status: 'FAILED',
+          message: error instanceof Error ? error.message : 'unknown failure'
+        })
+      )
       app.exit(1)
     }
   })
@@ -48,6 +69,16 @@ if (process.argv.includes('--self-test')) {
             filters: [{ name: 'PDF documents', extensions: ['pdf'] }]
           })
           return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]!
+        },
+        copyText: (text) => clipboard.writeText(text),
+        saveText: async (suggestedName, text) => {
+          const result = await dialog.showSaveDialog({
+            defaultPath: suggestedName,
+            filters: [{ name: 'Text document', extensions: ['txt'] }]
+          })
+          if (result.canceled || result.filePath === undefined) return false
+          await writeFile(result.filePath, text, 'utf8')
+          return true
         }
       }),
       ipcMain

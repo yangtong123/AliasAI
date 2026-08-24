@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AiExecutionError, ReviewQueryError } from '@aliasai/application'
 import { initializeRuntime, type AliasAiRuntime } from '../runtime'
 import { createHandlerRegistry, type HandlerRegistry } from './handlers'
@@ -85,9 +85,13 @@ describe('IPC handler registry', () => {
   const directories: string[] = []
   let runtime: AliasAiRuntime
   let registry: HandlerRegistry
-  const host = { pickPdf: async () => '/synthetic/path.pdf' }
+  const copyText = vi.fn()
+  const saveText = vi.fn(async () => true)
+  const host = { pickPdf: async () => '/synthetic/path.pdf', copyText, saveText }
 
   beforeEach(async () => {
+    copyText.mockReset()
+    saveText.mockClear()
     const directory = await mkdtemp(join(tmpdir(), 'aliasai-ipc-'))
     directories.push(directory)
     runtime = await initializeRuntime(
@@ -115,6 +119,39 @@ describe('IPC handler registry', () => {
     expect(created.ok).toBe(true)
     const listed = await registry['matter:list']({})
     expect(listed.ok && listed.data.map((matter) => matter.name)).toContain('Synthetic IPC Matter')
+  })
+
+  it('keeps the selected filesystem path in main while importing', async () => {
+    const matter = await registry['matter:create']({ name: 'Synthetic Import Matter' })
+    expect(matter.ok).toBe(true)
+    if (!matter.ok) return
+    const imported = vi.spyOn(runtime.services.importDocs, 'importFromPath').mockResolvedValue({
+      id: 'document-imported',
+      matterId: matter.data.id,
+      fileHash: 'synthetic-hash',
+      mimeType: 'application/pdf',
+      parseStatus: 'IMPORTED',
+      createdAt: 1,
+      updatedAt: 1
+    })
+    vi.spyOn(runtime.services.reviewQuery, 'listDocuments').mockReturnValue([
+      {
+        id: 'document-imported',
+        matterId: matter.data.id,
+        originalName: 'synthetic.pdf',
+        mimeType: 'application/pdf',
+        parseStatus: 'IMPORTED',
+        pageCount: undefined,
+        createdAt: 1,
+        updatedAt: 1
+      }
+    ])
+
+    expect(await registry['document:pickAndImport']({ matterId: matter.data.id })).toMatchObject({
+      ok: true,
+      data: { id: 'document-imported' }
+    })
+    expect(imported).toHaveBeenCalledWith(matter.data.id, '/synthetic/path.pdf')
   })
 
   it('validates payloads with field-level errors', async () => {
@@ -146,6 +183,61 @@ describe('IPC handler registry', () => {
         message: 'Sanitized Document is not available for AI'
       }
     })
+  })
+
+  it('reloads a completed AI result in main before copying or exporting it', async () => {
+    const getCompleted = vi.spyOn(runtime.services.ai, 'getCompleted').mockReturnValue({
+      id: 'ai-1',
+      sanitizedDocumentId: 'sanitized-1',
+      providerId: 'mock-v1',
+      status: 'COMPLETED',
+      sanitizedResponse: 'Synthetic sanitized response',
+      rehydratedResponse: 'Synthetic restored response',
+      unresolvedTokens: [],
+      createdAt: 1,
+      finishedAt: 2
+    })
+
+    expect(
+      await registry['ai:copyResult']({
+        executionId: 'ai-1',
+        variant: 'REHYDRATED',
+        includeRestoreOnRequest: true
+      })
+    ).toEqual({ ok: true, data: { copied: true } })
+    expect(copyText).toHaveBeenCalledWith('Synthetic restored response')
+    expect(getCompleted).toHaveBeenCalledWith('ai-1', true)
+
+    expect(await registry['ai:exportResult']({ executionId: 'ai-1', variant: 'SANITIZED' })).toEqual({
+      ok: true,
+      data: { saved: true }
+    })
+    expect(saveText).toHaveBeenCalledWith('AliasAI-sanitized-response.txt', 'Synthetic sanitized response')
+  })
+
+  it('reloads a sanitized document in main before copying or exporting it', async () => {
+    const getSanitizedText = vi
+      .spyOn(runtime.services.preview, 'getSanitizedText')
+      .mockReturnValue('Synthetic sanitized document')
+
+    expect(
+      await registry['preview:copySanitized']({ documentId: 'document-1', sanitizedDocumentId: 'sanitized-1' })
+    ).toEqual({ ok: true, data: { copied: true } })
+    expect(copyText).toHaveBeenCalledWith('Synthetic sanitized document')
+
+    expect(
+      await registry['preview:exportSanitized']({ documentId: 'document-1', sanitizedDocumentId: 'sanitized-1' })
+    ).toEqual({ ok: true, data: { saved: true } })
+    expect(saveText).toHaveBeenCalledWith('AliasAI-sanitized-document.txt', 'Synthetic sanitized document')
+    expect(getSanitizedText).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects invalid AI result delivery variants before touching the clipboard or filesystem', async () => {
+    const result = await registry['ai:copyResult']({ executionId: 'ai-1', variant: 'RAW_DATABASE_VALUE' })
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR' } })
+    expect(copyText).not.toHaveBeenCalled()
+    expect(saveText).not.toHaveBeenCalled()
   })
 
   it('registers every channel on a fake ipcMain with the aliasai prefix', () => {

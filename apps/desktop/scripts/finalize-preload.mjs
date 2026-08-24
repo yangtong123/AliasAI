@@ -1,7 +1,20 @@
-import { copyFile } from 'node:fs/promises'
-import { URL } from 'node:url'
+import { build } from 'esbuild'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const compiledPreload = new URL('../dist/preload/index.js', import.meta.url)
-const sandboxedPreload = new URL('../dist/preload/index.cjs', import.meta.url)
+const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
-await copyFile(compiledPreload, sandboxedPreload)
+// Electron's sandboxed preload cannot require sibling files. Bundle the
+// allowlist and bridge into one CommonJS artifact rather than merely renaming
+// TypeScript's multi-file CommonJS output.
+await build({
+  entryPoints: [resolve(desktopRoot, 'preload/src/index.ts')],
+  bundle: true,
+  platform: 'node',
+  target: 'node22',
+  format: 'cjs',
+  outfile: resolve(desktopRoot, 'dist/preload/index.cjs'),
+  external: ['electron'],
+  sourcemap: false,
+  logLevel: 'info'
+})

@@ -19,7 +19,7 @@ export interface SelfTestResult {
  * (packages/application/test/review-flow.e2e.test.ts): one checksum-valid ID
  * number and one synthetic email in the text layer.
  */
-function syntheticPdf(text: string): Buffer {
+export function syntheticPdf(text: string): Buffer {
   const escaped = text.replaceAll('\\', '\\\\').replaceAll('(', '\\)').replaceAll('(', '\\(')
   const content = `BT /F1 10 Tf 18 84 Td (${escaped}) Tj ET`
   const objects = [

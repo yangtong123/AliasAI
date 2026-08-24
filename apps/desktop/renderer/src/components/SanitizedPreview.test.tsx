@@ -23,10 +23,33 @@ describe('SanitizedPreviewView', () => {
       blockers: [{ mentionId: 'mention-1', reason: 'UNRESOLVED' }]
     }
 
-    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    const onReviewMention = vi.fn()
+    render(
+      <SanitizedPreviewView
+        documentId="document-1"
+        preview={preview}
+        onGenerated={() => {}}
+        onReviewMention={onReviewMention}
+      />
+    )
 
     expect(screen.getByText(/Preview blocked/)).toBeDefined()
     expect(screen.getByText(/mention-1: UNRESOLVED/)).toBeDefined()
+    screen.getByRole('button', { name: 'Review mention' }).click()
+    expect(onReviewMention).toHaveBeenCalledWith('mention-1')
+  })
+
+  it('generates a sanitized preview once no blockers remain', async () => {
+    const preview: SanitizedPreview = { status: 'READY', blockers: [] }
+    invoke.mockResolvedValueOnce({ ok: true, data: { status: 'AVAILABLE' } })
+    const onGenerated = vi.fn()
+    const user = userEvent.setup()
+
+    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={onGenerated} />)
+    await user.click(screen.getByRole('button', { name: 'Generate sanitized preview' }))
+
+    expect(invoke).toHaveBeenCalledWith('preview:generate', { documentId: 'document-1' })
+    expect(onGenerated).toHaveBeenCalledTimes(1)
   })
 
   it('renders sanitized spans, restore policies, and the local rehydration demo', async () => {
@@ -75,6 +98,41 @@ describe('SanitizedPreviewView', () => {
     expect(await screen.findByText(/Unresolved tokens.*@I-0000000000000000/)).toBeDefined()
   })
 
+  it('copies and exports the persisted sanitized document without returning its text to main', async () => {
+    const preview: SanitizedPreview = {
+      status: 'AVAILABLE',
+      sanitizedDocumentId: 'sanitized-1',
+      createdAt: 1,
+      blocks: [{ blockId: 'block-1', pageNo: 0, readingOrder: 0, text: 'Holder One〔@N-ABC123〕' }]
+    }
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'preview:copySanitized') return Promise.resolve({ ok: true, data: { copied: true } })
+      if (channel === 'preview:exportSanitized') return Promise.resolve({ ok: true, data: { saved: true } })
+      return Promise.resolve({ ok: true, data: null })
+    })
+    const user = userEvent.setup()
+
+    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    await user.click(screen.getByRole('button', { name: 'Copy sanitized document' }))
+    expect(await screen.findByText('Sanitized document copied.')).toBeDefined()
+    await user.click(screen.getByRole('button', { name: 'Export sanitized document…' }))
+    expect(await screen.findByText('Sanitized document saved.')).toBeDefined()
+
+    expect(invoke).toHaveBeenCalledWith('preview:copySanitized', {
+      documentId: 'document-1',
+      sanitizedDocumentId: 'sanitized-1'
+    })
+    expect(invoke).toHaveBeenCalledWith('preview:exportSanitized', {
+      documentId: 'document-1',
+      sanitizedDocumentId: 'sanitized-1'
+    })
+    const deliveryPayloads = invoke.mock.calls
+      .filter(([channel]) => channel === 'preview:copySanitized' || channel === 'preview:exportSanitized')
+      .map(([, payload]) => payload)
+    expect(JSON.stringify(deliveryPayloads)).not.toContain('Holder One')
+    expect(JSON.stringify(deliveryPayloads)).not.toContain('@N-ABC123')
+  })
+
   it('runs Mock AI and displays sanitized and locally rehydrated responses', async () => {
     const preview: SanitizedPreview = {
       status: 'AVAILABLE',
@@ -109,6 +167,56 @@ describe('SanitizedPreviewView', () => {
     })
     expect(await screen.findByText('Analysis: Holder One〔@N-ABC123〕')).toBeDefined()
     expect(screen.getByText('Analysis: Synthetic Person')).toBeDefined()
+  })
+
+  it('copies and exports an exact persisted result without sending response plaintext from the renderer', async () => {
+    const preview: SanitizedPreview = {
+      status: 'AVAILABLE',
+      sanitizedDocumentId: 'sanitized-1',
+      createdAt: 1,
+      blocks: [{ blockId: 'block-1', pageNo: 0, readingOrder: 0, text: 'Holder One〔@N-ABC123〕' }]
+    }
+    const completed = {
+      id: 'ai-1',
+      sanitizedDocumentId: 'sanitized-1',
+      providerId: 'mock-v1',
+      status: 'COMPLETED',
+      sanitizedResponse: 'Analysis: Holder One〔@N-ABC123〕',
+      rehydratedResponse: 'Analysis: Synthetic Person',
+      unresolvedTokens: [],
+      createdAt: 1,
+      finishedAt: 2
+    }
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'ai:latest') return Promise.resolve({ ok: true, data: completed })
+      if (channel === 'ai:copyResult') return Promise.resolve({ ok: true, data: { copied: true } })
+      if (channel === 'ai:exportResult') return Promise.resolve({ ok: true, data: { saved: true } })
+      return Promise.resolve({ ok: true, data: null })
+    })
+    const user = userEvent.setup()
+
+    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    expect(await screen.findByText('Analysis: Synthetic Person')).toBeDefined()
+    await user.click(screen.getByRole('button', { name: 'Copy restored response' }))
+    expect(await screen.findByText('Restored response copied.')).toBeDefined()
+    await user.click(screen.getByRole('button', { name: 'Export sanitized response…' }))
+    expect(await screen.findByText('Sanitized response saved.')).toBeDefined()
+
+    expect(invoke).toHaveBeenCalledWith('ai:copyResult', {
+      executionId: 'ai-1',
+      variant: 'REHYDRATED',
+      includeRestoreOnRequest: false
+    })
+    expect(invoke).toHaveBeenCalledWith('ai:exportResult', {
+      executionId: 'ai-1',
+      variant: 'SANITIZED',
+      includeRestoreOnRequest: false
+    })
+    const deliveryPayloads = invoke.mock.calls
+      .filter(([channel]) => channel === 'ai:copyResult' || channel === 'ai:exportResult')
+      .map(([, payload]) => payload)
+    expect(JSON.stringify(deliveryPayloads)).not.toContain(completed.sanitizedResponse)
+    expect(JSON.stringify(deliveryPayloads)).not.toContain(completed.rehydratedResponse)
   })
 
   it('drops a stale Mock AI result after the sanitized document switches', async () => {

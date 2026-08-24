@@ -8,6 +8,10 @@ import type { AliasAiRuntime } from '../runtime'
 export interface HandlerHost {
   /** Opens the OS file picker filtered to PDFs; returns null when cancelled. */
   readonly pickPdf: () => Promise<string | null>
+  /** Explicitly copies a locally reloaded result to the OS clipboard. */
+  readonly copyText: (text: string) => void
+  /** Opens the OS save dialog and writes only after the user chooses a path. */
+  readonly saveText: (suggestedName: string, text: string) => Promise<boolean>
 }
 
 export type HandlerRegistry = {
@@ -28,6 +32,19 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
     if (found === undefined) throw new Error('imported document summary was not found')
     return found
   }
+  const loadAiResult = (payload: unknown): { text: string; suggestedName: string } => {
+    const executionId = requireId(readField(payload, 'executionId'), 'executionId')
+    const variant = requireEnum(readField(payload, 'variant'), ['SANITIZED', 'REHYDRATED'], 'variant')
+    const includeRestoreOnRequest = optionalBoolean(
+      readOptionalField(payload, 'includeRestoreOnRequest'),
+      'includeRestoreOnRequest',
+      false
+    )
+    const execution = services.ai.getCompleted(executionId, includeRestoreOnRequest)
+    return variant === 'SANITIZED'
+      ? { text: execution.sanitizedResponse, suggestedName: 'AliasAI-sanitized-response.txt' }
+      : { text: execution.rehydratedResponse, suggestedName: 'AliasAI-restored-response.txt' }
+  }
 
   return {
     'matter:list': (payload) =>
@@ -43,15 +60,11 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
         if (summary === undefined) throw new Error('created matter summary was not found')
         return summary
       }),
-    'dialog:pickPdf': (payload) =>
-      toIpcResult(async () => {
-        requireEmpty(payload)
-        return { filePath: await host.pickPdf() }
-      }),
-    'document:import': (payload) =>
+    'document:pickAndImport': (payload) =>
       toIpcResult(async () => {
         const matterId = requireId(readField(payload, 'matterId'), 'matterId')
-        const filePath = requireId(readField(payload, 'filePath'), 'filePath')
+        const filePath = await host.pickPdf()
+        if (filePath === null) return null
         const imported = await services.importDocs.importFromPath(matterId, filePath)
         return importedSummary(matterId, imported.id)
       }),
@@ -136,6 +149,20 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
         )
         return services.preview.rehydrateDemo({ sanitizedDocumentId, text, includeRestoreOnRequest })
       }),
+    'preview:copySanitized': (payload) =>
+      toIpcResult(() => {
+        const documentId = requireId(readField(payload, 'documentId'), 'documentId')
+        const sanitizedDocumentId = requireId(readField(payload, 'sanitizedDocumentId'), 'sanitizedDocumentId')
+        host.copyText(services.preview.getSanitizedText(documentId, sanitizedDocumentId))
+        return { copied: true as const }
+      }),
+    'preview:exportSanitized': (payload) =>
+      toIpcResult(async () => {
+        const documentId = requireId(readField(payload, 'documentId'), 'documentId')
+        const sanitizedDocumentId = requireId(readField(payload, 'sanitizedDocumentId'), 'sanitizedDocumentId')
+        const text = services.preview.getSanitizedText(documentId, sanitizedDocumentId)
+        return { saved: await host.saveText('AliasAI-sanitized-document.txt', text) }
+      }),
     'ai:execute': (payload) =>
       toIpcResult(async () => {
         const sanitizedDocumentId = requireId(readField(payload, 'sanitizedDocumentId'), 'sanitizedDocumentId')
@@ -155,6 +182,17 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
           false
         )
         return services.ai.findLatest(sanitizedDocumentId, includeRestoreOnRequest) ?? null
+      }),
+    'ai:copyResult': (payload) =>
+      toIpcResult(() => {
+        const result = loadAiResult(payload)
+        host.copyText(result.text)
+        return { copied: true as const }
+      }),
+    'ai:exportResult': (payload) =>
+      toIpcResult(async () => {
+        const result = loadAiResult(payload)
+        return { saved: await host.saveText(result.suggestedName, result.text) }
       })
   }
 }

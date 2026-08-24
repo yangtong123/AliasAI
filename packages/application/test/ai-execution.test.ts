@@ -203,6 +203,21 @@ describe('AiExecutionService', () => {
     ).toBe(`结论：原告甲〔${token}〕提交证据。`)
   })
 
+  it('reloads one exact completed execution for a local copy or export action', async () => {
+    const { executions } = service()
+    await executions.execute('sanitized-1')
+
+    expect(executions.getCompleted('ai-execution-1')).toMatchObject({
+      id: 'ai-execution-1',
+      status: 'COMPLETED',
+      sanitizedResponse: `分析：原告甲〔${token}〕提交证据。`,
+      rehydratedResponse: '分析：张伟提交证据。'
+    })
+    expect(() => executions.getCompleted('missing-execution')).toThrowError(
+      expect.objectContaining({ code: 'AI_RESULT_NOT_AVAILABLE' })
+    )
+  })
+
   it.each([
     ['protected plaintext', `张伟与原告甲〔${token}〕`],
     ['internal identifier', `document-1 原告甲〔${token}〕`],

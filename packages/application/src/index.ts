@@ -56,6 +56,8 @@ export class DocumentImportService {
 
   async importFromPath(matterId: string, filePath: string): Promise<Document> {
     const source = await inspectDocumentSource(filePath)
+    const existing = this.documents.findByMatterAndFileHash(matterId, source.fileHash)
+    if (existing !== undefined) return existing
     const timestamp = this.now()
     const id = generateUuidV7(timestamp)
     return this.documents.create({
@@ -131,3 +133,4 @@ export * from './review-read'
 export * from './review-operations'
 export * from './sanitized-preview'
 export * from './ai-execution'
+export * from './startup-recovery'

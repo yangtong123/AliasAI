@@ -70,6 +70,10 @@ Layering and boundary rules:
   failures through a single sanitizing envelope — known service errors surface
   their code and static message; everything else collapses to INTERNAL_ERROR,
   so paths, stacks, and plaintext inside raw errors never cross the boundary.
+  The PDF chooser and import are one main-process operation: filesystem paths
+  never round-trip through the renderer. Copy/export requests likewise carry
+  only artifact/execution IDs; main reloads the persisted value before writing
+  to the clipboard or a path explicitly chosen in the native save dialog.
 - **Preload**: exactly one bridge function (`invoke(channel, payload)`) gated
   by a channel allowlist that a drift test keeps in sync with the registered
   handlers. Preload keeps zero workspace imports.
@@ -92,6 +96,15 @@ persists them via Electron `safeStorage` (OS keychain) in `userData`. The
 window and IPC handlers are created only after the keys and database are ready.
 When `safeStorage` is unavailable the app fails closed; `ALIASAI_ALLOW_PLAINTEXT_KEYS=1`
 is a documented development fallback.
+
+Startup recovery runs after migrations and key loading but before IPC or the
+renderer exists. Any ProcessingJob or AI execution left RUNNING by a crash is
+atomically moved to FAILED with an encrypted code-only `INTERRUPTED` payload;
+its in-flight Document becomes FAILED while completed Pages, Blocks, Mentions,
+sanitized artifacts, and prior AI results remain intact. The UI then selects
+the retry action from the latest failed job (parse, detect, or resolve), while
+SANITIZE retry remains in the preview workflow. Re-importing the same unchanged
+PDF into the same Matter is idempotent by Matter + SHA-256 fingerprint.
 
 Known V1 limitations (deliberate):
 

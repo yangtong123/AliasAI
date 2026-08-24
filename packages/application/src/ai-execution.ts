@@ -179,7 +179,19 @@ export class AiExecutionService {
 
   findLatest(sanitizedDocumentId: string, includeRestoreOnRequest = false): AiExecutionView | undefined {
     const execution = this.executions.findLatest(sanitizedDocumentId)
-    if (execution === undefined) return undefined
+    return execution === undefined ? undefined : this.toView(execution, includeRestoreOnRequest)
+  }
+
+  /** Reloads one persisted result for an explicit local copy/export action. */
+  getCompleted(executionId: string, includeRestoreOnRequest = false): Extract<AiExecutionView, { status: 'COMPLETED' }> {
+    const execution = this.executions.findById(executionId)
+    if (execution === undefined || execution.status !== 'COMPLETED') {
+      throw new AiExecutionError('AI_RESULT_NOT_AVAILABLE', 'Completed AI result is not available')
+    }
+    return this.toView(execution, includeRestoreOnRequest) as Extract<AiExecutionView, { status: 'COMPLETED' }>
+  }
+
+  private toView(execution: AiExecutionRecord, includeRestoreOnRequest: boolean): AiExecutionView {
     if (execution.status === 'RUNNING') {
       return {
         id: execution.id,

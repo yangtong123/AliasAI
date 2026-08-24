@@ -96,7 +96,8 @@ pnpm --filter @aliasai/desktop package:x64
 Each script runs the normal build, provisions the Python runtime for the
 target arch, and invokes electron-builder (`apps/desktop/electron-builder.yml`)
 for `dir` + `zip` targets. Output lands in `apps/desktop/release/`
-(`mac-arm64/AliasAI.app` and `AliasAI-0.0.0-<arch>-mac.zip`, ~160 MB).
+(`mac-arm64/AliasAI.app` / `mac/AliasAI.app` and
+`AliasAI-<version>-arm64-mac.zip` / `AliasAI-<version>-mac.zip`, ~160 MB).
 `better-sqlite3` is rebuilt against the Electron ABI during packaging.
 
 ## Verifying a package
@@ -104,6 +105,7 @@ for `dir` + `zip` targets. Output lands in `apps/desktop/release/`
 ```sh
 node apps/desktop/scripts/audit-package.mjs [path/to/AliasAI.app]
 AliasAI.app/Contents/MacOS/AliasAI --self-test
+AliasAI.app/Contents/MacOS/AliasAI --ui-self-test
 ```
 
 - **Audit** fails the build on forbidden content (test files, mock worker,
@@ -124,11 +126,18 @@ AliasAI.app/Contents/MacOS/AliasAI --self-test
   resolve → review → sanitization → Mock AI → local rehydration. It prints a
   JSON stage summary and exits non-zero on any failure. On machines without
   an interactive keychain (CI), run it with `ALIASAI_ALLOW_PLAINTEXT_KEYS=1`.
+- **UI self-test** creates a real sandboxed Electron `BrowserWindow` and drives
+  the production React → bundled preload → validated IPC → application stack.
+  It clicks the same controls a tester uses through Matter creation, PDF
+  import, parse/detect/resolve, confirmation, sanitization, Mock AI, local
+  rehydration, copy, and export. Native chooser/clipboard capabilities are
+  replaced at their narrow main-process boundary with deterministic in-memory
+  hosts so CI never touches the runner's personal clipboard or files.
 
 All gates run in CI for every push to `main` and on pull requests that touch
 the app, packages, or worker sources
 (`.github/workflows/packaging.yml`, `macos-15` arm64 + `macos-15-intel` x64
-matrix): audit → manifest record → self-test → strict manifest re-check, and
+matrix): audit → manifest record → service self-test → UI self-test → strict manifest re-check, and
 the zips are uploaded as artifacts.
 
 ## User data, upgrades, and troubleshooting
@@ -136,9 +145,16 @@ the zips are uploaded as artifacts.
 - All persistent state lives under
   `~/Library/Application Support/AliasAI/` (`userData`): `aliasai.db`
   (SQLite database) and `aliasai.keys` (safeStorage-wrapped keys). Nothing is
-  written inside the `.app` bundle.
+  written inside the `.app` bundle. The sole intentional exception is a text
+  export after the user explicitly chooses a destination in the native save
+  dialog; copying similarly places the selected result on the OS clipboard.
 - Upgrades: replace the app bundle; `userData` is untouched and migrations
-  run on next launch. Uninstalling the app does not delete user data.
+  run on next launch. A migration regression test opens a 0003 database,
+  preserves an existing Matter, and upgrades it through 0004. Uninstalling the
+  app does not delete user data.
+- After an unclean shutdown, startup recovery marks interrupted jobs FAILED
+  before opening a window. Select the document and use the stage-specific
+  Retry action; completed encrypted artifacts are preserved.
 - Gatekeeper (unsigned V1 builds): right-click the app → Open, or
   `xattr -dr com.apple.quarantine AliasAI.app` after download.
 - `PYTHON_RUNTIME_UNAVAILABLE` at startup means the bundled Python resources

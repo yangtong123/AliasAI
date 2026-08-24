@@ -10,7 +10,12 @@ export default defineConfig({
         test: {
           name: 'node',
           environment: 'node',
-          include: ['packages/**/*.test.ts', 'apps/desktop/main/**/*.test.ts', 'apps/desktop/preload/**/*.test.ts']
+          include: [
+            'packages/**/*.test.ts',
+            'apps/desktop/main/**/*.test.ts',
+            'apps/desktop/preload/**/*.test.ts',
+            'apps/desktop/scripts/**/*.test.ts'
+          ]
         }
       },
       {

@@ -8,6 +8,7 @@ export function SanitizedPreviewView(props: {
   readonly documentId: string
   readonly preview: SanitizedPreview | null
   readonly onGenerated: () => void
+  readonly onReviewMention?: (mentionId: string) => void
 }) {
   const [includeOnRequest, setIncludeOnRequest] = useState(true)
   const [demoText, setDemoText] = useState('')
@@ -20,6 +21,13 @@ export function SanitizedPreviewView(props: {
       ...input
     })
   )
+  const copySanitized = useMutation((documentId: string, sanitizedDocumentId: string) =>
+    invoke('preview:copySanitized', { documentId, sanitizedDocumentId })
+  )
+  const exportSanitized = useMutation((documentId: string, sanitizedDocumentId: string) =>
+    invoke('preview:exportSanitized', { documentId, sanitizedDocumentId })
+  )
+  const [artifactStatus, setArtifactStatus] = useState<string | null>(null)
 
   if (props.preview === null) {
     return <p className="empty">No preview yet</p>
@@ -28,13 +36,38 @@ export function SanitizedPreviewView(props: {
     return <p className="empty">Run the pipeline to READY before generating a preview ({props.preview.parseStatus}).</p>
   }
   if (props.preview.status === 'READY') {
+    if (props.preview.blockers.length === 0) {
+      return (
+        <section className="preview">
+          <h3>Ready to sanitize</h3>
+          <p>All detected mentions have assignments and restoration tokens.</p>
+          <button
+            type="button"
+            disabled={generate.pending}
+            onClick={() => {
+              void generate.run().then((result) => {
+                if (result !== null) props.onGenerated()
+              })
+            }}
+          >
+            {generate.pending ? 'Generating…' : 'Generate sanitized preview'}
+          </button>
+          {generate.error !== null && <p className="error">{generate.error.message}</p>}
+        </section>
+      )
+    }
     return (
       <section className="preview">
         <h3>Preview blocked</h3>
         <ul>
           {props.preview.blockers.map((blocker) => (
             <li key={blocker.mentionId}>
-              {blocker.mentionId}: {blocker.reason}
+              {blocker.mentionId}: {blocker.reason}{' '}
+              {props.onReviewMention !== undefined && (
+                <button type="button" onClick={() => props.onReviewMention?.(blocker.mentionId)}>
+                  Review mention
+                </button>
+              )}
             </li>
           ))}
         </ul>
@@ -54,6 +87,34 @@ export function SanitizedPreviewView(props: {
           {block.text}
         </p>
       ))}
+      <div className="result-actions">
+        <button
+          type="button"
+          disabled={copySanitized.pending || exportSanitized.pending}
+          onClick={() => {
+            void copySanitized.run(props.documentId, preview.sanitizedDocumentId).then((result) => {
+              if (result !== null) setArtifactStatus('Sanitized document copied.')
+            })
+          }}
+        >
+          Copy sanitized document
+        </button>
+        <button
+          type="button"
+          disabled={copySanitized.pending || exportSanitized.pending}
+          onClick={() => {
+            void exportSanitized.run(props.documentId, preview.sanitizedDocumentId).then((result) => {
+              if (result?.saved === true) setArtifactStatus('Sanitized document saved.')
+            })
+          }}
+        >
+          Export sanitized document…
+        </button>
+      </div>
+      {(copySanitized.error ?? exportSanitized.error) !== null && (
+        <p className="error">{(copySanitized.error ?? exportSanitized.error)!.message}</p>
+      )}
+      {artifactStatus !== null && <p role="status">{artifactStatus}</p>}
 
       {/* Remounting per document keeps AI execution state (results, pending,
           errors) from ever bleeding across documents. */}

@@ -49,7 +49,11 @@ jobs:
           # deterministic local encryption for its throwaway data directory.
           ALIASAI_ALLOW_PLAINTEXT_KEYS: '1'
         run: apps/desktop/release/mac*/AliasAI.app/Contents/MacOS/AliasAI --self-test
-      - name: Verify the bundle is byte-identical after the self-test
+      - name: Drive the packaged desktop UI end to end
+        env:
+          ALIASAI_ALLOW_PLAINTEXT_KEYS: '1'
+        run: apps/desktop/release/mac*/AliasAI.app/Contents/MacOS/AliasAI --ui-self-test
+      - name: Verify the bundle is byte-identical after the acceptance tests
         # The manifest (path, type, permissions, sha256 per file) is compared
         # strictly, so any mutation — not only rule violations — fails here.
         run: node apps/desktop/scripts/audit-package.mjs --check-manifest apps/desktop/release/bundle-manifest.txt

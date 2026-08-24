@@ -28,7 +28,7 @@ export function MentionDetail(props: {
       </h3>
       <p>
         {mention.type} · {mention.strength} · confidence {mention.confidence.toFixed(2)} · page {mention.pageNo + 1}
-        {mention.margin !== null && <> · margin {mention.margin}</>}
+        {mention.margin !== null && <> · margin {mention.margin}</>} · review {mention.reviewStatus}
       </p>
       {mention.assignedEntity !== null && (
         <p>
@@ -50,14 +50,14 @@ export function MentionDetail(props: {
           {mention.assignedEntity !== null && (
             <button
               type="button"
-              disabled={confirm.pending}
+              disabled={confirm.pending || mention.reviewStatus === 'CONFIRMED'}
               onClick={() => {
                 void confirm.run(mention.mentionId).then((result) => {
                   if (result !== null) props.onChanged()
                 })
               }}
             >
-              Confirm
+              {mention.reviewStatus === 'CONFIRMED' ? 'Confirmed' : 'Confirm'}
             </button>
           )}
           {confirm.error !== null && <p className="error">{confirm.error.message}</p>}

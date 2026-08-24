@@ -10,6 +10,8 @@ interface PanelState {
   readonly loadError: UiError | null
 }
 
+type ResultVariant = 'SANITIZED' | 'REHYDRATED'
+
 /**
  * One AI execution panel for a single sanitized artifact and restore policy.
  * The parent remounts the panel (key) when the document changes, so no state
@@ -77,6 +79,16 @@ export function AiExecutionPanel(props: { readonly sanitizedDocumentId: string }
   })
   const runPending = run.pending && mutationKey === sourceKey
   const runError = mutationKey === sourceKey ? run.error : null
+  const copy = useMutation((executionId: string, variant: ResultVariant) =>
+    invoke('ai:copyResult', { executionId, variant, includeRestoreOnRequest: includeOnRequest })
+  )
+  const exportResult = useMutation((executionId: string, variant: ResultVariant) =>
+    invoke('ai:exportResult', { executionId, variant, includeRestoreOnRequest: includeOnRequest })
+  )
+  const [deliveryKey, setDeliveryKey] = useState<string | null>(null)
+  const [deliveryStatus, setDeliveryStatus] = useState<{ readonly sourceKey: string; readonly message: string } | null>(null)
+  const deliveryPending = deliveryKey === sourceKey && (copy.pending || exportResult.pending)
+  const deliveryError = deliveryKey === sourceKey ? (copy.error ?? exportResult.error) : null
 
   // Derived at render time: a result from a different sourceKey (document or
   // restore policy) never displays, not even for the frame before effects run.
@@ -105,13 +117,66 @@ export function AiExecutionPanel(props: { readonly sanitizedDocumentId: string }
         <div className="ai-results">
           <h4>Sanitized AI response</h4>
           <pre>{execution.sanitizedResponse}</pre>
+          <ResultActions
+            label="sanitized"
+            disabled={deliveryPending}
+            onCopy={() => {
+              setDeliveryKey(sourceKey)
+              void copy.run(execution.id, 'SANITIZED').then((result) => {
+                if (result !== null) setDeliveryStatus({ sourceKey, message: 'Sanitized response copied.' })
+              })
+            }}
+            onExport={() => {
+              setDeliveryKey(sourceKey)
+              void exportResult.run(execution.id, 'SANITIZED').then((result) => {
+                if (result?.saved === true) setDeliveryStatus({ sourceKey, message: 'Sanitized response saved.' })
+              })
+            }}
+          />
           <h4>Locally rehydrated response</h4>
           <pre>{execution.rehydratedResponse}</pre>
+          <p className="warning">Copying or exporting this restored result exposes sensitive plaintext outside AliasAI.</p>
+          <ResultActions
+            label="restored"
+            disabled={deliveryPending}
+            onCopy={() => {
+              setDeliveryKey(sourceKey)
+              void copy.run(execution.id, 'REHYDRATED').then((result) => {
+                if (result !== null) setDeliveryStatus({ sourceKey, message: 'Restored response copied.' })
+              })
+            }}
+            onExport={() => {
+              setDeliveryKey(sourceKey)
+              void exportResult.run(execution.id, 'REHYDRATED').then((result) => {
+                if (result?.saved === true) setDeliveryStatus({ sourceKey, message: 'Restored response saved.' })
+              })
+            }}
+          />
           {execution.unresolvedTokens.length > 0 && (
             <p className="warning">Unresolved tokens: {execution.unresolvedTokens.join(', ')}</p>
           )}
+          {deliveryError !== null && <p className="error">{deliveryError.message}</p>}
+          {deliveryStatus?.sourceKey === sourceKey && <p role="status">{deliveryStatus.message}</p>}
         </div>
       )}
     </section>
+  )
+}
+
+function ResultActions(props: {
+  readonly label: 'sanitized' | 'restored'
+  readonly disabled: boolean
+  readonly onCopy: () => void
+  readonly onExport: () => void
+}) {
+  return (
+    <div className="result-actions">
+      <button type="button" disabled={props.disabled} onClick={props.onCopy}>
+        Copy {props.label} response
+      </button>
+      <button type="button" disabled={props.disabled} onClick={props.onExport}>
+        Export {props.label} response…
+      </button>
+    </div>
   )
 }

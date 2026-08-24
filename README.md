@@ -1,6 +1,6 @@
 # AliasAI
 
-Local-first, privacy-preserving AI workspace. The V1 workflow runs locally from PDF parsing and privacy detection through entity review, immutable sanitization, privacy-checked Mock AI execution, encrypted response persistence, and local rehydration.
+Local-first, privacy-preserving AI workspace. V1 RC1 runs locally from PDF parsing and privacy detection through entity review, immutable sanitization, privacy-checked Mock AI execution, encrypted response persistence, local rehydration, and explicit copy/export.
 
 ## Development
 
@@ -23,14 +23,15 @@ pnpm --filter @aliasai/desktop package        # host arch: unpacked .app + zip i
 pnpm --filter @aliasai/desktop package:arm64  # or package:x64
 ```
 
-The bundle embeds a pinned standalone Python runtime and the native PDF worker, so testers need no repository, Node, or system Python. Verify a build with the contents audit and the packaged full-pipeline self-test:
+The bundle embeds a pinned standalone Python runtime and the native PDF worker, so testers need no repository, Node, or system Python. Verify a build with the contents audit, service acceptance test, and real desktop UI acceptance test:
 
 ```sh
 node apps/desktop/scripts/audit-package.mjs
 apps/desktop/release/mac-arm64/AliasAI.app/Contents/MacOS/AliasAI --self-test
+apps/desktop/release/mac-arm64/AliasAI.app/Contents/MacOS/AliasAI --ui-self-test
 ```
 
-CI builds both architectures on every push to `main` and uploads the zips as artifacts. Details: [docs/packaging.md](docs/packaging.md).
+CI builds both architectures on every push to `main` and uploads the zips as artifacts. Test-user instructions and acceptance criteria: [docs/rc1-acceptance.md](docs/rc1-acceptance.md). Packaging details: [docs/packaging.md](docs/packaging.md).
 
 ## Package boundaries
 

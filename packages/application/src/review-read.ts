@@ -7,7 +7,9 @@ import type {
   MentionStrength,
   MentionType,
   MentionReviewStatus,
-  MentionDetector
+  MentionDetector,
+  ProcessingJobStatus,
+  ProcessingJobType
 } from '@aliasai/domain'
 import type {
   CandidateWithEvidence,
@@ -112,8 +114,8 @@ export interface BlockReviewDTO {
 }
 
 export interface JobSummaryDTO {
-  readonly type: string
-  readonly status: string
+  readonly type: ProcessingJobType
+  readonly status: ProcessingJobStatus
   readonly progress: number
   readonly createdAt: number
 }

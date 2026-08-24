@@ -61,6 +61,24 @@ describe('application use cases', () => {
     expect(decrypt(row.source_path_cipher, key, Buffer.from(`${document.id}:document.sourcePath`)).toString()).toBe(sourcePath)
   })
 
+  it('reuses an existing Document when the same file is imported twice into one Matter', async () => {
+    const matter = new MatterService(new MatterRepository(db), { persistenceKey: key }, () => 1_725_000_000_000).create(
+      'Synthetic Matter'
+    )
+    const directory = await mkdtemp(join(tmpdir(), 'aliasai-application-'))
+    temporaryDirectories.push(directory)
+    const sourcePath = join(directory, 'duplicate.pdf')
+    await writeFile(sourcePath, 'synthetic duplicate source')
+    let timestamp = 1_725_000_000_001
+    const imports = new DocumentImportService(new DocumentRepository(db), { persistenceKey: key }, () => timestamp++)
+
+    const first = await imports.importFromPath(matter.id, sourcePath)
+    const second = await imports.importFromPath(matter.id, sourcePath)
+
+    expect(second).toEqual(first)
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM documents').get()).toEqual({ count: 1 })
+  })
+
   it('creates a Matter-scoped Entity, primary alias, and encrypted audit event', () => {
     const matter = new MatterService(new MatterRepository(db), { persistenceKey: key }, () => 1_725_000_000_000).create(
       'Synthetic Matter'

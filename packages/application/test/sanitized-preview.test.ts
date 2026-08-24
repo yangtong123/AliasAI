@@ -80,6 +80,8 @@ describe('SanitizedPreviewService', () => {
   it('generates the preview without exposing Mapping Vault rows and supports local rehydration', async () => {
     seedReadyDocument({ assignEmail: true, assignPhone: true, phoneHasToken: true })
 
+    expect(preview.getPreview('document-1')).toEqual({ status: 'READY', blockers: [] })
+
     const generated = await preview.generatePreview('document-1')
     expect(generated.status).toBe('AVAILABLE')
     if (generated.status !== 'AVAILABLE') return
@@ -90,6 +92,12 @@ describe('SanitizedPreviewService', () => {
     expect(sanitized.match(/〔@[NET]-[A-Z0-9]+〕/g)).toHaveLength(2)
     expect('mappings' in generated).toBe(false)
     expect(JSON.stringify(generated)).not.toContain('synthetic@example.test')
+    const exported = preview.getSanitizedText('document-1', generated.sanitizedDocumentId)
+    expect(exported).toBe(sanitized)
+    expect(exported).not.toContain('synthetic@example.test')
+    expect(() => preview.getSanitizedText('document-1', 'sanitized-other')).toThrowError(
+      expect.objectContaining({ code: 'SANITIZED_DOCUMENT_NOT_AVAILABLE' })
+    )
 
     // Rehydration demo: restored on request, withheld by default.
     const aiEcho = `联系方式:${sanitized}`

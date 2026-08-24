@@ -14,7 +14,7 @@ import type {
   RehydrationService
 } from './index'
 import type { ApplicationKeys } from './index'
-import { sanitizedBlockTextContext } from './sanitization'
+import { SanitizationError, sanitizedBlockTextContext } from './sanitization'
 
 export type SanitizationBlockerReason =
   | 'UNSUPPORTED_TYPE'
@@ -70,10 +70,10 @@ export class SanitizedPreviewService {
       return this.toAvailablePreview(documentId, completed.sanitizedDocument.id, completed.sanitizedDocument.createdAt)
     }
     if (document.parseStatus === 'READY' || document.parseStatus === 'FAILED') {
-      const blockers = this.review
-        .findSanitizationReadiness(documentId)
-        .map((mention) => ({ mentionId: mention.mentionId, reason: blockerReason(mention) }))
-        .filter((blocker): blocker is { mentionId: string; reason: SanitizationBlockerReason } => blocker !== null)
+      const blockers = this.review.findSanitizationReadiness(documentId).flatMap((mention) => {
+        const reason = blockerReason(mention)
+        return reason === null ? [] : [{ mentionId: mention.mentionId, reason }]
+      })
       return { status: 'READY', blockers }
     }
     return { status: 'NOT_READY', parseStatus: document.parseStatus }
@@ -88,6 +88,15 @@ export class SanitizedPreviewService {
   /** Local rehydration demo over the Mapping Vault; no AI provider involved. */
   rehydrateDemo(input: RehydrationInput): RehydrationResult {
     return this.rehydration.rehydrate(input)
+  }
+
+  /** Reloads an immutable sanitized artifact for an explicit local copy/export. */
+  getSanitizedText(documentId: string, sanitizedDocumentId: string): string {
+    const preview = this.getPreview(documentId)
+    if (preview.status !== 'AVAILABLE' || preview.sanitizedDocumentId !== sanitizedDocumentId) {
+      throw new SanitizationError('SANITIZED_DOCUMENT_NOT_AVAILABLE', 'Sanitized Document is not available')
+    }
+    return preview.blocks.map((block) => block.text).join('\n\n')
   }
 
   private toAvailablePreview(

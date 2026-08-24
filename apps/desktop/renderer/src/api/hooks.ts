@@ -8,25 +8,73 @@ import type {
 } from '@aliasai/application'
 import { invoke, UiError } from './client'
 
-export function useMatters(): { readonly matters: readonly MatterSummaryDTO[]; readonly error: UiError | null } {
+export function useMatters(refreshKey = 0): {
+  readonly matters: readonly MatterSummaryDTO[]
+  readonly loaded: boolean
+  readonly error: UiError | null
+} {
   const [matters, setMatters] = useState<readonly MatterSummaryDTO[]>([])
+  const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<UiError | null>(null)
 
   useEffect(() => {
     let active = true
+    setLoaded(false)
+    setError(null)
     invoke('matter:list', {})
       .then((result) => {
-        if (active) setMatters(result)
+        if (active) {
+          setMatters(result)
+          setLoaded(true)
+        }
       })
       .catch((failure: unknown) => {
-        if (active) setError(failure instanceof UiError ? failure : null)
+        if (active) {
+          setError(failure instanceof UiError ? failure : null)
+          setLoaded(true)
+        }
       })
     return () => {
       active = false
     }
-  }, [])
+  }, [refreshKey])
 
-  return { matters, error }
+  return { matters, loaded, error }
+}
+
+export function useDocuments(
+  matterId: string | null,
+  refreshKey: number
+): { readonly documents: readonly DocumentSummaryDTO[]; readonly loaded: boolean; readonly error: UiError | null } {
+  const [documents, setDocuments] = useState<readonly DocumentSummaryDTO[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [error, setError] = useState<UiError | null>(null)
+
+  useEffect(() => {
+    setDocuments([])
+    setError(null)
+    setLoaded(matterId === null)
+    if (matterId === null) return
+    let active = true
+    invoke('document:list', { matterId })
+      .then((result) => {
+        if (active) {
+          setDocuments(result)
+          setLoaded(true)
+        }
+      })
+      .catch((failure: unknown) => {
+        if (active) {
+          setError(failure instanceof UiError ? failure : null)
+          setLoaded(true)
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [matterId, refreshKey])
+
+  return { documents, loaded, error }
 }
 
 const IN_FLIGHT_STATUSES = new Set(['PARSING', 'DETECTING', 'RESOLVING', 'SANITIZING'])
@@ -60,6 +108,9 @@ export function useDocumentStatus(
   }, [document])
 
   useEffect(() => {
+    setDocument(null)
+    setJobs([])
+    setError(null)
     if (documentId === null) return
     let active = true
     invoke('document:get', { documentId })
@@ -88,6 +139,8 @@ export function useDocumentReview(
   const [error, setError] = useState<UiError | null>(null)
 
   useEffect(() => {
+    setReview(null)
+    setError(null)
     if (documentId === null) return
     let active = true
     invoke('review:getDocument', { documentId })
@@ -113,6 +166,8 @@ export function useSanitizedPreview(
   const [error, setError] = useState<UiError | null>(null)
 
   useEffect(() => {
+    setPreview(null)
+    setError(null)
     if (documentId === null) return
     let active = true
     invoke('preview:get', { documentId })
