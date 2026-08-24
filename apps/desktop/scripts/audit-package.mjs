@@ -73,9 +73,9 @@ async function isFile(path) {
   }
 }
 
-/** Flat list of every directory, file, and symlink under root. */
+/** Flat list of every directory (including the root), file, and symlink. */
 async function collectEntries(root) {
-  const entries = []
+  const entries = [{ relativePath: '.', type: 'd', mode: (await stat(root)).mode }]
   const queue = [root]
   while (queue.length > 0) {
     const directory = queue.pop()
@@ -150,14 +150,17 @@ function isThirdPartyProvenance(relativePath) {
 }
 
 async function findAppBundle(explicit) {
-  if (explicit !== undefined) return explicit
+  // Always hand back an absolute path: symlink containment compares the
+  // resolved link target against this root by prefix, and a relative root
+  // would misjudge every legitimate in-bundle link as an escape.
+  if (explicit !== undefined) return resolve(explicit)
   const candidates = ['mac-arm64', 'mac', 'mac-x64']
     .map((name) => join(releaseRoot, name, 'AliasAI.app'))
     .filter((path) => existsSync(path))
   if (candidates.length === 0) {
     throw new Error('No AliasAI.app found under release/; pass the .app path explicitly')
   }
-  return candidates[0]
+  return resolve(candidates[0])
 }
 
 function parseArguments(raw) {
