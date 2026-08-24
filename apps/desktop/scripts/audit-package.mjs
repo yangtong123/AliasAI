@@ -23,7 +23,7 @@ const FORBIDDEN_NAMES = [
   /\.(test|spec)\.py$/,
   /(^|\.)mock_worker\.py$/,
   /\.tsx?$/,
-  /\.jsx?\.map$/,
+  /\.map$/,
   /\.pyc$/,
   /^\.env(\..*)?$/,
   /\.(db|sqlite|sqlite3)$/,
@@ -36,6 +36,8 @@ const FORBIDDEN_NAMES = [
 const FORBIDDEN_SEGMENTS = new Set(['.venv', 'tests', '__pycache__', '.pytest_cache', 'coverage', '.git'])
 const TEXT_EXTENSIONS = new Set(['.js', '.cjs', '.mjs', '.json', '.html', '.css', '.yml', '.yaml', '.py', '.txt', '.plist'])
 const REPO_PATH_PATTERN = /develop\/project|Users\/[a-z]+\/develop/i
+/** Inline source maps embed full sources; standalone .map files are also banned. */
+const INLINE_SOURCE_MAP_PATTERN = 'sourceMappingURL=data:'
 
 const REQUIRED = [
   'Contents/MacOS/AliasAI',
@@ -107,11 +109,7 @@ async function main() {
     ) {
       violations.push(`forbidden file name: ${relativePath}`)
     }
-    if (
-      relativePath.includes('node_modules/better-sqlite3') &&
-      base.endsWith('.node') &&
-      (base.startsWith('darwin-') || base === 'better_sqlite3.node')
-    ) {
+    if (relativePath.includes('node_modules/better-sqlite3') && base.endsWith('.node') && base.startsWith('darwin-')) {
       sawNativeBinding = true
     }
     if (relativePath.includes('drizzle') && base.endsWith('.sql')) sawDrizzleSql = true
@@ -122,8 +120,17 @@ async function main() {
       if (TEXT_EXTENSIONS.has(extension)) {
         const text = await readFile(file, 'utf8')
         if (REPO_PATH_PATTERN.test(text)) violations.push(`repository path leak: ${relativePath}`)
+        if (text.includes(INLINE_SOURCE_MAP_PATTERN)) violations.push(`inline source map: ${relativePath}`)
       }
     }
+  }
+
+  // The asar archive is one binary file the walk above cannot classify; scan
+  // it directly for embedded inline source maps.
+  const asarPath = join(appBundle, 'Contents/Resources/app.asar')
+  if (await isFile(asarPath)) {
+    const asar = await readFile(asarPath)
+    if (asar.includes(Buffer.from(INLINE_SOURCE_MAP_PATTERN))) violations.push('inline source map: app.asar')
   }
   if (!sawNativeBinding) missing.push('node_modules/better-sqlite3 darwin native binding')
   if (!sawDrizzleSql) missing.push('**/drizzle/*.sql (database migrations)')

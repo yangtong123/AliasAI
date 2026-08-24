@@ -4,8 +4,15 @@
  * the packaged app as extraResources (`python-runtime/`, `python-workers/`).
  *
  * The runtime is a pinned python-build-standalone (install_only_stripped)
- * CPython with a fully pinned set of requirements, so a packaged build never
- * depends on the developer's .venv, system Python, or PyPI drift.
+ * CPython; requirements install with --require-hashes from the committed
+ * python-requirements.lock, so a packaged build never depends on the
+ * developer's .venv, system Python, or index drift.
+ *
+ * A single global stamp (arch, archive checksum, lock checksum, worker
+ * source checksum) guards the shared build/ output: a cache hit requires the
+ * stamp to match exactly, so switching architectures or editing worker
+ * sources always reprovisions. Provisioning happens in a staging directory
+ * that is swapped into place atomically only after every step succeeded.
  *
  * Usage: node scripts/prepare-python.mjs [--arch arm64|x64]
  */
@@ -13,7 +20,6 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -23,6 +29,7 @@ const buildRoot = join(desktopRoot, 'build')
 const cacheRoot = join(buildRoot, 'cache')
 const runtimeRoot = join(buildRoot, 'python-runtime')
 const workersRoot = join(buildRoot, 'python-workers')
+const lockPath = join(desktopRoot, 'python-requirements.lock')
 
 /** Pinned python-build-standalone release; sha256 values come from the release's SHA256SUMS. */
 const PYTHON_BUILD_STANDALONE = {
@@ -40,15 +47,6 @@ const PYTHON_BUILD_STANDALONE = {
     }
   }
 }
-
-/** Runtime requirements, pinned to the versions the repository .venv resolved. */
-const RUNTIME_REQUIREMENTS = [
-  'pdfminer.six==20260107',
-  'cryptography==50.0.0',
-  'cffi==2.1.1',
-  'pycparser==3.0',
-  'charset-normalizer==3.5.0'
-]
 
 /** Worker sources bundled with the app; everything else (tests, mock/OCR workers) stays out. */
 const WORKER_FILES = ['native_worker.py', 'native_pdf.py', 'protocol.py']
@@ -71,9 +69,9 @@ function resolveArchitecture(raw) {
   return process.arch === 'arm64' ? 'arm64' : 'x64'
 }
 
-async function sha256(path) {
+async function sha256(data) {
   const hash = createHash('sha256')
-  hash.update(await readFile(path))
+  hash.update(data)
   return hash.digest('hex')
 }
 
@@ -107,30 +105,96 @@ function runPython(python, arguments_) {
   if (result.status !== 0) throw new Error(`python ${arguments_.join(' ')} failed`)
 }
 
+/** Stamp over every input that the shared build/ output depends on. */
+async function stampContents(arch, pin) {
+  const lockData = await readFile(lockPath)
+  const workers = await Promise.all(
+    WORKER_FILES.map(async (file) => `${file}:${await sha256(await readFile(join(repositoryRoot, 'python', 'document_parser', file)))}`)
+  )
+  return [`arch=${arch}`, `archive=${pin.sha256}`, `lock=${await sha256(lockData)}`, `workers=${workers.join(',')}`].join('\n')
+}
+
+async function provision(staging, archivePath) {
+  await extract(archivePath, staging)
+  // install_only archives extract a single top-level "python/" directory.
+  const runtime = join(staging, 'python')
+  if (!existsSync(runtime)) throw new Error('Archive layout changed: no python/ directory')
+  const pythonCommand = join(runtime, 'bin', 'python3')
+
+  // Wheel hashes are verified by pip itself; nothing installs without a match.
+  runPython(pythonCommand, [
+    '-m',
+    'pip',
+    'install',
+    '--no-cache-dir',
+    '--disable-pip-version-check',
+    '--require-hashes',
+    '-r',
+    lockPath
+  ])
+
+  // Strip every bin entry except the interpreters: console scripts carry
+  // the build machine's absolute paths and would leak them into the app.
+  for (const entry of await readdir(join(runtime, 'bin'))) {
+    if (KEEP_BIN_ENTRIES.has(entry)) continue
+    await rm(join(runtime, 'bin', entry), { recursive: true, force: true })
+  }
+  // The app never installs packages at runtime; dropping pip (and its
+  // vendored CA bundle) keeps the bundle lean and path-clean.
+  const sitePackages = join(runtime, 'lib', `python${PYTHON_BUILD_STANDALONE.python.slice(0, 4)}`, 'site-packages')
+  for (const entry of await readdir(sitePackages)) {
+    if (entry === 'pip' || /^pip-.*\.dist-info$/.test(entry) || /^setuptools/.test(entry) || /^wheel/.test(entry)) {
+      await rm(join(sitePackages, entry), { recursive: true, force: true })
+    }
+  }
+
+  const workers = join(staging, 'python-workers', 'document_parser')
+  await mkdir(workers, { recursive: true })
+  for (const file of WORKER_FILES) {
+    const source = join(repositoryRoot, 'python', 'document_parser', file)
+    if (!existsSync(source)) throw new Error(`Worker source missing: ${source}`)
+    await writeFile(join(workers, file), await readFile(source))
+  }
+  return { runtime, workers: join(staging, 'python-workers') }
+}
+
+/** Swaps staged directories into build/ so a failed run never leaves mixed output. */
+async function swapIntoPlace(stagedRuntime, stagedWorkers) {
+  await mkdir(buildRoot, { recursive: true })
+  const retired = []
+  for (const [staged, target] of [
+    [stagedRuntime, runtimeRoot],
+    [stagedWorkers, workersRoot]
+  ]) {
+    if (existsSync(target)) {
+      const trash = `${target}.retired`
+      await rm(trash, { recursive: true, force: true })
+      await rename(target, trash)
+      retired.push(trash)
+    }
+    await rename(staged, target)
+  }
+  for (const trash of retired) await rm(trash, { recursive: true, force: true })
+}
+
 async function main() {
   const arch = resolveArchitecture(process.argv.slice(2))
   const pin = PYTHON_BUILD_STANDALONE.archives[arch]
-  const stampPath = join(buildRoot, `python-${arch}.stamp`)
-  const stamp = [
-    `release=${PYTHON_BUILD_STANDALONE.release}`,
-    `python=${PYTHON_BUILD_STANDALONE.python}`,
-    `requirements=${RUNTIME_REQUIREMENTS.join(',')}`,
-    `workers=${WORKER_FILES.join(',')}`,
-    'binPrune=1',
-    'pipPrune=1'
-  ].join('\n')
-  const pythonCommand = join(runtimeRoot, 'bin', 'python3')
-  const workerEntry = join(workersRoot, 'document_parser', 'native_worker.py')
-  if ((await isFile(stampPath)) !== undefined && (await readFile(stampPath, 'utf8')) === stamp) {
-    if (existsSync(pythonCommand) && existsSync(workerEntry)) {
-      console.log(`python runtime (${arch}) already provisioned`)
-      return
-    }
+  const stampPath = join(buildRoot, 'python.stamp')
+  const stamp = await stampContents(arch, pin)
+  const stampUnchanged = (await isFile(stampPath)) !== undefined && (await readFile(stampPath, 'utf8')) === stamp
+  if (
+    stampUnchanged &&
+    existsSync(join(runtimeRoot, 'bin', 'python3')) &&
+    existsSync(join(workersRoot, 'document_parser', 'native_worker.py'))
+  ) {
+    console.log(`python runtime (${arch}) already provisioned`)
+    return
   }
 
   await mkdir(cacheRoot, { recursive: true })
   const archivePath = join(cacheRoot, pin.name)
-  if ((await isFile(archivePath)) !== undefined && (await sha256(archivePath)) !== pin.sha256) {
+  if ((await isFile(archivePath)) !== undefined && (await sha256(await readFile(archivePath))) !== pin.sha256) {
     await rm(archivePath, { force: true })
   }
   if ((await isFile(archivePath)) === undefined) {
@@ -138,58 +202,15 @@ async function main() {
     console.log(`downloading ${url}`)
     await download(url, archivePath)
   }
-  const digest = await sha256(archivePath)
-  if (digest !== pin.sha256) throw new Error(`Checksum mismatch for ${pin.name}: ${digest}`)
+  if ((await sha256(await readFile(archivePath))) !== pin.sha256) {
+    throw new Error(`Checksum mismatch for ${pin.name}`)
+  }
 
-  const staging = await mkdtemp(join(tmpdir(), 'aliasai-python-'))
+  // Staging stays inside build/ (same volume) so the final swap is atomic.
+  const staging = await mkdtemp(join(buildRoot, 'python-staging-'))
   try {
-    await extract(archivePath, staging)
-    // install_only archives extract a single top-level "python/" directory.
-    const extracted = join(staging, 'python')
-    if (!existsSync(extracted)) throw new Error('Archive layout changed: no python/ directory')
-    await rm(runtimeRoot, { recursive: true, force: true })
-    await mkdir(buildRoot, { recursive: true })
-    await rename(extracted, runtimeRoot)
-
-    const requirementsPath = join(staging, 'requirements.txt')
-    await writeFile(requirementsPath, `${RUNTIME_REQUIREMENTS.join('\n')}\n`)
-    runPython(pythonCommand, [
-      '-m',
-      'pip',
-      'install',
-      '--no-cache-dir',
-      '--disable-pip-version-check',
-      '--only-binary',
-      ':all:',
-      '-r',
-      requirementsPath
-    ])
-
-    // Strip every bin entry except the interpreters: console scripts carry
-    // the build machine's absolute paths and would leak them into the app.
-    const binRoot = join(runtimeRoot, 'bin')
-    for (const entry of await readdir(binRoot)) {
-      if (KEEP_BIN_ENTRIES.has(entry)) continue
-      await rm(join(binRoot, entry), { recursive: true, force: true })
-    }
-
-    // The app never installs packages at runtime; dropping pip (and its
-    // vendored CA bundle) keeps the bundle lean and path-clean.
-    const sitePackages = join(runtimeRoot, 'lib', `python${PYTHON_BUILD_STANDALONE.python.slice(0, 4)}`, 'site-packages')
-    for (const entry of await readdir(sitePackages)) {
-      if (entry === 'pip' || /^pip-.*\.dist-info$/.test(entry) || /^setuptools/.test(entry) || /^wheel/.test(entry)) {
-        await rm(join(sitePackages, entry), { recursive: true, force: true })
-      }
-    }
-
-    await rm(workersRoot, { recursive: true, force: true })
-    await mkdir(join(workersRoot, 'document_parser'), { recursive: true })
-    for (const file of WORKER_FILES) {
-      const source = join(repositoryRoot, 'python', 'document_parser', file)
-      if (!existsSync(source)) throw new Error(`Worker source missing: ${source}`)
-      await writeFile(join(workersRoot, 'document_parser', file), await readFile(source))
-    }
-
+    const staged = await provision(staging, archivePath)
+    await swapIntoPlace(staged.runtime, staged.workers)
     await writeFile(stampPath, stamp)
     console.log(`python runtime (${arch}) ready: ${runtimeRoot}`)
   } finally {

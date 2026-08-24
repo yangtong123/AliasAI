@@ -1,4 +1,7 @@
-import { resolve } from 'node:path'
+import { existsSync } from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   PythonWorkerClient,
@@ -103,6 +106,44 @@ describe('Python worker Protocol v1', () => {
       'page_result',
       'completed'
     ])
+  })
+
+  it('never writes __pycache__ next to the worker script', async () => {
+    // A packaged app's install directory must stay byte-identical to what
+    // shipped: importing a sibling module from the worker's directory would
+    // normally create __pycache__/.pyc next to it on first run.
+    const directory = await mkdtemp(join(tmpdir(), 'aliasai-worker-'))
+    try {
+      await writeFile(join(directory, 'helper_module.py'), 'PROCESSED_PAGES = 1\n')
+      await writeFile(
+        join(directory, 'worker.py'),
+        [
+          'import json',
+          'import sys',
+          'import helper_module',
+          '',
+          'for line in sys.stdin:',
+          '    message = json.loads(line)',
+          '    if message["type"] != "process_document":',
+          '        continue',
+          '    reply = {"protocolVersion": 1, "jobId": message["jobId"], "documentId": message["documentId"]}',
+          '    print(json.dumps({**reply, "type": "started"}), flush=True)',
+          '    print(json.dumps({**reply, "type": "completed", "pageCount": helper_module.PROCESSED_PAGES,',
+          '                      "processedPages": helper_module.PROCESSED_PAGES}), flush=True)',
+          ''
+        ].join('\n')
+      )
+
+      worker = new PythonWorkerClient({ command: 'python3', args: [join(directory, 'worker.py')] })
+      worker.start()
+      await expect(worker.processDocument(processDocumentRequest())).resolves.toMatchObject({
+        type: 'completed',
+        processedPages: 1
+      })
+      expect(existsSync(join(directory, '__pycache__'))).toBe(false)
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 
   it('cancels a mock-worker job cooperatively and receives a terminal event', async () => {

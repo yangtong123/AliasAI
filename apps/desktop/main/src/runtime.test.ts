@@ -129,24 +129,40 @@ describe('desktop runtime', () => {
     expect(resolvePythonRuntime(resources)).toEqual({ command: '/synthetic/python', args: ['/synthetic/worker.py'] })
   })
 
-  it('fails closed when packaged resources are incomplete and no repo is discoverable', async () => {
+  it('fails closed for incomplete packaged resources even inside the repository', async () => {
     delete process.env.ALIASAI_PYTHON_COMMAND
     delete process.env.ALIASAI_NATIVE_WORKER_PATH
     const resources = await mkdtemp(join(tmpdir(), 'aliasai-resources-'))
     directories.push(resources)
     await mkdir(join(resources, 'python-runtime', 'bin'), { recursive: true })
     await writeFile(join(resources, 'python-runtime', 'bin', 'python3'), '#!/bin/sh\n', { mode: 0o755 })
-    // The worker script is missing: half a bundle must not resolve.
+    // The worker script is missing: a packaged install must fail closed
+    // instead of quietly falling back to the repository checkout.
     expect(resolvePackagedPythonResources(resources)).toBeUndefined()
+    expect(() => resolvePythonRuntime(resources)).toThrow(PythonRuntimeError)
+    expect(() => resolvePythonRuntime(resources)).toThrow(/bundled Python runtime is missing/)
+  })
 
-    const originalCwd = process.cwd()
-    try {
-      // Outside the repository no dev fallback exists either.
-      process.chdir(resources)
-      expect(() => resolvePythonRuntime(resources)).toThrow(PythonRuntimeError)
-    } finally {
-      process.chdir(originalCwd)
-    }
+  it('uses the bundled interpreter for the OCR worker in packaged installs', async () => {
+    const resources = await mkdtemp(join(tmpdir(), 'aliasai-resources-'))
+    directories.push(resources)
+    await mkdir(join(resources, 'python-runtime', 'bin'), { recursive: true })
+    await mkdir(join(resources, 'python-workers', 'document_parser'), { recursive: true })
+    const pythonCommand = join(resources, 'python-runtime', 'bin', 'python3')
+    await writeFile(pythonCommand, '#!/bin/sh\n', { mode: 0o755 })
+    await writeFile(
+      join(resources, 'python-workers', 'document_parser', 'native_worker.py'),
+      '# synthetic worker\n'
+    )
+    delete process.env.ALIASAI_PYTHON_COMMAND
+    process.env.ALIASAI_OCR_WORKER_PATH = '/synthetic/ocr_worker.py'
+
+    expect(resolveDocumentWorker(resources)).toEqual({
+      command: pythonCommand,
+      args: ['/synthetic/ocr_worker.py'],
+      parserType: 'OCR_PDF',
+      enableOcr: true
+    })
   })
 
   it('initializes the full runtime against a temp user data directory', async () => {

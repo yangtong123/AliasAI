@@ -48,17 +48,40 @@ feature and would require shipping the PaddleOCR stack.
   `install_only_stripped` CPython (release, Python version, and per-arch
   sha256 are hardcoded in the script; checksums come from the release's
   SHA256SUMS).
-- Requirements installed with that runtime's own pip, fully pinned:
-  `pdfminer.six==20260107`, `cryptography==50.0.0`, `cffi==2.1.1`,
-  `pycparser==3.0`, `charset-normalizer==3.5.0` (wheels only).
+- Requirements install with `pip install --require-hashes` from the committed
+  `apps/desktop/python-requirements.lock`, which pins every wheel (pure,
+  universal2, and per-arch variants) by sha256 — the same supply-chain
+  guarantee as the CPython archive itself.
 - Post-install pruning: `bin/` keeps only the `python3` interpreters, and the
   pip package is removed. Both steps exist because pip's console scripts and
   entry points embed the build machine's absolute paths — the audit rejects
   any repository path inside the bundle.
+- The worker process runs with `PYTHONDONTWRITEBYTECODE=1` (set by
+  `PythonWorkerClient`), so running the app never writes `__pycache__` into
+  `Contents/Resources`; CI re-audits the bundle after the self-test to prove
+  it stayed byte-identical.
 
-Bumping any pin means editing the constants at the top of the script (the
-stamp file invalidates automatically) and re-running packaging for both
-architectures.
+Provisioning is guarded by a single global stamp covering every input —
+architecture, archive checksum, requirements-lock checksum, and worker source
+checksums — and the runtime/workers directories are swapped in atomically
+from a staging directory only after provisioning fully succeeded. Switching
+architectures or editing a worker always reprovisions; a failed run never
+leaves mixed output.
+
+Bumping a pin means updating the constants at the top of the script and/or
+the lock file (the stamp invalidates automatically). To regenerate the lock,
+download both architectures' wheels from PyPI and record their hashes:
+
+```sh
+for arch in macosx_11_0_arm64 macosx_11_0_x86_64; do
+  python3 -m pip download --index-url https://pypi.org/simple \
+    --only-binary :all: --implementation cp --python-version 3.12 \
+    --platform "$arch" -d "/tmp/wheels-$arch" \
+    pdfminer.six==<ver> cryptography==<ver> cffi==<ver> pycparser==<ver> charset-normalizer==<ver>
+done
+shasum -a 256 /tmp/wheels-*/*
+# one entry per package, one --hash line per distinct wheel
+```
 
 ## Building locally
 
@@ -82,9 +105,10 @@ AliasAI.app/Contents/MacOS/AliasAI --self-test
 ```
 
 - **Audit** fails the build on forbidden content (test files, mock worker,
-  `.venv`, databases, key material, source maps, embedded repository paths)
-  and on missing required pieces (bundled interpreter, worker sources,
-  migrations, native SQLite binding).
+  `.venv`, databases, key material, standalone or inline source maps —
+  including inside `app.asar` — and embedded repository paths) and on missing
+  required pieces (bundled interpreter, worker sources, migrations, native
+  SQLite binding).
 - **Self-test** runs the complete user acceptance chain against the packaged
   binary in a throwaway `userData` directory: create Matter → import a
   synthetic PDF → parse (through the bundled Python worker) → detect →
@@ -92,9 +116,11 @@ AliasAI.app/Contents/MacOS/AliasAI --self-test
   JSON stage summary and exits non-zero on any failure. On machines without
   an interactive keychain (CI), run it with `ALIASAI_ALLOW_PLAINTEXT_KEYS=1`.
 
-Both gates run in CI for every push to `main`
+Both gates run in CI for every push to `main` and on pull requests that touch
+the app, packages, or worker sources
 (`.github/workflows/packaging.yml`, `macos-15` arm64 + `macos-15-intel` x64
-matrix) and the zips are uploaded as artifacts.
+matrix). The audit runs a second time **after** the self-test to prove the
+run did not mutate the bundle, and the zips are uploaded as artifacts.
 
 ## User data, upgrades, and troubleshooting
 

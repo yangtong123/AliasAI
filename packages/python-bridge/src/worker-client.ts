@@ -33,7 +33,14 @@ export class PythonWorkerClient {
   start(): void {
     if (this.child !== undefined) return
 
-    const child = spawn(this.options.command, [...this.options.args], { stdio: ['pipe', 'pipe', 'pipe'] })
+    // Bytecode writing is disabled so a worker never mutates its own install
+    // location: a packaged app's Contents/Resources must stay byte-identical
+    // to what shipped, and __pycache__ next to the worker would break the
+    // package audit.
+    const child = spawn(this.options.command, [...this.options.args], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' }
+    })
     this.child = child
     const output = createInterface({ input: child.stdout })
     let eventQueue = Promise.resolve()

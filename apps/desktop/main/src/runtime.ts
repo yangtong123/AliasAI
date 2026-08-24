@@ -202,9 +202,29 @@ export function resolvePackagedPythonResources(resourcesPath: string): PackagedP
 }
 
 /**
+ * Bundled resources for a packaged install, or undefined in development. A
+ * packaged install never falls back to the repository: an incomplete bundle
+ * is a broken install and fails closed immediately.
+ */
+function packagedRuntimeFor(resourcesPath: string): PackagedPythonResources
+function packagedRuntimeFor(resourcesPath: undefined): undefined
+function packagedRuntimeFor(resourcesPath: string | undefined): PackagedPythonResources | undefined {
+  if (resourcesPath === undefined) return undefined
+  const packaged = resolvePackagedPythonResources(resourcesPath)
+  if (packaged === undefined) {
+    throw new PythonRuntimeError(
+      'PYTHON_RUNTIME_UNAVAILABLE',
+      'The bundled Python runtime is missing or incomplete. Reinstall the application.'
+    )
+  }
+  return packaged
+}
+
+/**
  * Resolves the Python command and native worker script. Env overrides win;
- * a packaged install then resolves from its bundled resources; development
- * falls back to repository workspace discovery.
+ * a packaged install resolves only from its bundled resources (fail-closed
+ * when they are incomplete); development falls back to repository workspace
+ * discovery.
  */
 export function resolvePythonRuntime(packagedResourcesPath?: string): { command: string; args: string[] } {
   const command = process.env.ALIASAI_PYTHON_COMMAND
@@ -212,15 +232,17 @@ export function resolvePythonRuntime(packagedResourcesPath?: string): { command:
   if (command !== undefined && scriptPath !== undefined) {
     return { command, args: [scriptPath] }
   }
-  const packaged =
-    packagedResourcesPath === undefined ? undefined : resolvePackagedPythonResources(packagedResourcesPath)
+  if (packagedResourcesPath !== undefined) {
+    const packaged = packagedRuntimeFor(packagedResourcesPath)
+    return { command: command ?? packaged.pythonCommand, args: [scriptPath ?? packaged.nativeWorkerPath] }
+  }
   const workspaceRoot = findWorkspaceRoot(process.cwd())
-  const script = scriptPath ?? packaged?.nativeWorkerPath ?? findWorkerScript(workspaceRoot)
-  const python = command ?? packaged?.pythonCommand ?? resolvePythonCommand(workspaceRoot)
+  const script = scriptPath ?? findWorkerScript(workspaceRoot)
+  const python = command ?? resolvePythonCommand(workspaceRoot)
   if (script === undefined) {
     throw new PythonRuntimeError(
       'PYTHON_RUNTIME_UNAVAILABLE',
-      'The document parsing worker is not available. Set ALIASAI_PYTHON_COMMAND and ALIASAI_NATIVE_WORKER_PATH, or reinstall the application: the bundled Python runtime is missing.'
+      'The document parsing worker is not available. Set ALIASAI_PYTHON_COMMAND and ALIASAI_NATIVE_WORKER_PATH.'
     )
   }
   return { command: python, args: [script] }
@@ -245,7 +267,7 @@ export function resolveDocumentWorker(packagedResourcesPath?: string): ResolvedD
     return { command: runtime.command, args: runtime.args, parserType: 'NATIVE_PDF', enableOcr: false }
   }
   const packaged =
-    packagedResourcesPath === undefined ? undefined : resolvePackagedPythonResources(packagedResourcesPath)
+    packagedResourcesPath === undefined ? undefined : packagedRuntimeFor(packagedResourcesPath)
   const python =
     process.env.ALIASAI_PYTHON_COMMAND ??
     packaged?.pythonCommand ??

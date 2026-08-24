@@ -34,7 +34,9 @@ const options = {
   define: {
     'import.meta.url': '__import_meta_url'
   },
-  sourcemap: 'inline',
+  // Watch builds keep inline maps for local debugging; production bundles
+  // stay map-free so packaged sources never ship inside app.asar.
+  sourcemap: watch ? 'inline' : false,
   logLevel: 'info'
 }
 
