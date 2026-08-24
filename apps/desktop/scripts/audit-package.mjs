@@ -15,12 +15,12 @@
  */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { readdir, readFile, lstat, readlink, stat, writeFile } from 'node:fs/promises'
-import { dirname, join, relative } from 'node:path'
+import { readdir, readFile, lstat, readlink, realpath, stat, writeFile } from 'node:fs/promises'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const desktopRoot = dirname(dirname(fileURLToPath(import.meta.url)))
-const repositoryRoot = dirname(desktopRoot)
+const repositoryRoot = dirname(dirname(desktopRoot))
 const releaseRoot = join(desktopRoot, 'release')
 
 const FORBIDDEN_NAMES = [
@@ -73,7 +73,7 @@ async function isFile(path) {
   }
 }
 
-/** Flat list of every file and symlink under root (directories implied). */
+/** Flat list of every directory, file, and symlink under root. */
 async function collectEntries(root) {
   const entries = []
   const queue = [root]
@@ -81,12 +81,17 @@ async function collectEntries(root) {
     const directory = queue.pop()
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name)
-      if (entry.isDirectory()) queue.push(path)
-      else if (entry.isFile()) {
+      if (entry.isDirectory()) {
+        // Directories are manifest entries too: a new empty directory or a
+        // permission change must fail the strict comparison.
+        const info = await stat(path)
+        entries.push({ relativePath: relative(root, path), type: 'd', mode: info.mode })
+        queue.push(path)
+      } else if (entry.isFile()) {
         const info = await stat(path)
         entries.push({ relativePath: relative(root, path), type: 'f', mode: info.mode, path })
       } else if (entry.isSymbolicLink()) {
-        entries.push({ relativePath: relative(root, path), type: 'l', mode: 0, target: await readlink(path) })
+        entries.push({ relativePath: relative(root, path), type: 'l', mode: 0, path, target: await readlink(path) })
       }
     }
   }
@@ -94,8 +99,34 @@ async function collectEntries(root) {
   return entries
 }
 
+/**
+ * A symlink is only legal when it resolves inside the bundle: absolute
+ * targets and chains escaping the .app would pass every other check (the
+ * REQUIRED probes follow links) while shipping a binary that only works on
+ * the build machine — python3 -> /bin/sh must fail here.
+ */
+async function assertSymlinkContained(root, entry, violations) {
+  const lexical = resolve(dirname(entry.path), entry.target)
+  if (isAbsolute(entry.target) || !lexical.startsWith(`${root}${sep}`)) {
+    violations.push(`symlink escapes the bundle: ${entry.relativePath} -> ${entry.target}`)
+    return
+  }
+  let real
+  try {
+    real = await realpath(entry.path)
+  } catch {
+    violations.push(`broken symlink: ${entry.relativePath} -> ${entry.target}`)
+    return
+  }
+  const realRoot = await realpath(root)
+  if (real !== realRoot && !real.startsWith(`${realRoot}${sep}`)) {
+    violations.push(`symlink resolves outside the bundle: ${entry.relativePath} -> ${entry.target}`)
+  }
+}
+
 function manifestLine(entry, digest) {
   if (entry.type === 'l') return `l 00000000 symlink->${entry.target} ${entry.relativePath}`
+  if (entry.type === 'd') return `d ${entry.mode.toString(8).padStart(8, '0')} - ${entry.relativePath}`
   return `f ${entry.mode.toString(8).padStart(8, '0')} ${digest} ${entry.relativePath}`
 }
 
@@ -172,7 +203,12 @@ async function main() {
     }
     if (relativePath.includes('drizzle') && base.endsWith('.sql')) sawDrizzleSql = true
 
+    if (entry.type === 'd') {
+      manifest.push(manifestLine(entry))
+      continue
+    }
     if (entry.type === 'l') {
+      await assertSymlinkContained(appBundle, entry, violations)
       manifest.push(manifestLine(entry))
       continue
     }
