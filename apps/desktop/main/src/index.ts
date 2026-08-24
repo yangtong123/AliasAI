@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, safeStorage } from 'electron'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { initializeRuntime, type AliasAiRuntime } from './runtime'
+import { runSelfTest } from './self-test'
 import { createHandlerRegistry } from './ipc/handlers'
 import { registerIpcHandlers } from './ipc/register'
 
@@ -9,6 +10,56 @@ const currentDirectory = dirname(fileURLToPath(import.meta.url))
 const rendererUrl = parseRendererUrl(process.env.ALIASAI_RENDERER_URL)
 const rendererFilePath = join(currentDirectory, '../renderer/index.html')
 const rendererFileUrl = pathToFileURL(rendererFilePath)
+
+if (process.argv.includes('--self-test')) {
+  // Packaged-app acceptance mode: no window, no IPC, a throwaway userData
+  // directory, and the full pipeline through the real (bundled) Python
+  // worker. Exit code and stdout JSON are the contract for CI and testers.
+  void app.whenReady().then(async () => {
+    try {
+      const result = await runSelfTest(app, safeStorage)
+      console.log(JSON.stringify({ status: 'PASSED', stages: result.stages }))
+      app.exit(0)
+    } catch (error) {
+      // Sanitized: static stage messages only, never values or paths.
+      console.error(JSON.stringify({ status: 'FAILED', message: error instanceof Error ? error.message : 'unknown failure' }))
+      app.exit(1)
+    }
+  })
+} else {
+  void app.whenReady().then(async () => {
+    let runtime: AliasAiRuntime
+    try {
+      // Keys and the database must exist before any renderer or IPC handler.
+      runtime = await initializeRuntime(app, safeStorage)
+    } catch (error) {
+      // Sanitized message: never surfaces paths, keys, or stack traces.
+      const message = error instanceof Error ? error.message : 'Unknown startup failure'
+      dialog.showErrorBox('AliasAI', message)
+      app.quit()
+      return
+    }
+
+    registerIpcHandlers(
+      createHandlerRegistry(runtime, {
+        pickPdf: async () => {
+          const result = await dialog.showOpenDialog({
+            properties: ['openFile'],
+            filters: [{ name: 'PDF documents', extensions: ['pdf'] }]
+          })
+          return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]!
+        }
+      }),
+      ipcMain
+    )
+
+    createWindow()
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
+  })
+}
 
 function parseRendererUrl(value: string | undefined): URL | undefined {
   if (value === undefined) return undefined
@@ -63,39 +114,6 @@ function createWindow(): BrowserWindow {
 
   return window
 }
-
-app.whenReady().then(async () => {
-  let runtime: AliasAiRuntime
-  try {
-    // Keys and the database must exist before any renderer or IPC handler.
-    runtime = await initializeRuntime(app, safeStorage)
-  } catch (error) {
-    // Sanitized message: never surfaces paths, keys, or stack traces.
-    const message = error instanceof Error ? error.message : 'Unknown startup failure'
-    dialog.showErrorBox('AliasAI', message)
-    app.quit()
-    return
-  }
-
-  registerIpcHandlers(
-    createHandlerRegistry(runtime, {
-      pickPdf: async () => {
-        const result = await dialog.showOpenDialog({
-          properties: ['openFile'],
-          filters: [{ name: 'PDF documents', extensions: ['pdf'] }]
-        })
-        return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]!
-      }
-    }),
-    ipcMain
-  )
-
-  createWindow()
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
-})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

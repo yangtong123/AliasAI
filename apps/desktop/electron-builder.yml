@@ -1,0 +1,31 @@
+# electron-builder configuration for the V1 macOS distributable.
+#
+# The main process ships as a single esbuild bundle (dist/main/index.cjs), so
+# the only production Node dependency is better-sqlite3; everything else in
+# devDependencies (React, Vite, the @aliasai packages) is compiled away. The
+# bundled Python runtime and worker sources travel outside asar via
+# extraResources and are resolved by resolvePackagedPythonResources.
+appId: app.aliasai.desktop
+productName: AliasAI
+asar: true
+directories:
+  output: release
+files:
+  - dist/**/*
+  - package.json
+asarUnpack:
+  - '**/*.node'
+  - dist/main/drizzle/**
+extraResources:
+  - from: build/python-runtime
+    to: python-runtime
+  - from: build/python-workers
+    to: python-workers
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dir
+    - target: zip
+  # V1 ships unsigned builds for testers; Gatekeeper bypass is documented.
+  identity: null
+npmRebuild: true

@@ -1,10 +1,16 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { initializeRuntime, resolveDocumentWorker, resolvePythonRuntime } from './runtime'
+import {
+  PythonRuntimeError,
+  initializeRuntime,
+  resolveDocumentWorker,
+  resolvePackagedPythonResources,
+  resolvePythonRuntime
+} from './runtime'
 
 describe('desktop runtime', () => {
   const directories: string[] = []
@@ -88,6 +94,61 @@ describe('desktop runtime', () => {
     })
   })
 
+  it('resolves the bundled python runtime for packaged installs', async () => {
+    delete process.env.ALIASAI_PYTHON_COMMAND
+    delete process.env.ALIASAI_NATIVE_WORKER_PATH
+    const resources = await mkdtemp(join(tmpdir(), 'aliasai-resources-'))
+    directories.push(resources)
+    await mkdir(join(resources, 'python-runtime', 'bin'), { recursive: true })
+    await mkdir(join(resources, 'python-workers', 'document_parser'), { recursive: true })
+    const pythonCommand = join(resources, 'python-runtime', 'bin', 'python3')
+    const nativeWorkerPath = join(resources, 'python-workers', 'document_parser', 'native_worker.py')
+    await writeFile(pythonCommand, '#!/bin/sh\n', { mode: 0o755 })
+    await writeFile(nativeWorkerPath, '# synthetic worker\n')
+
+    expect(resolvePackagedPythonResources(resources)).toEqual({ pythonCommand, nativeWorkerPath })
+    expect(resolvePythonRuntime(resources)).toEqual({ command: pythonCommand, args: [nativeWorkerPath] })
+    expect(resolveDocumentWorker(resources)).toEqual({
+      command: pythonCommand,
+      args: [nativeWorkerPath],
+      parserType: 'NATIVE_PDF',
+      enableOcr: false
+    })
+  })
+
+  it('prefers env overrides over bundled packaged resources', async () => {
+    const resources = await mkdtemp(join(tmpdir(), 'aliasai-resources-'))
+    directories.push(resources)
+    await mkdir(join(resources, 'python-runtime', 'bin'), { recursive: true })
+    await mkdir(join(resources, 'python-workers', 'document_parser'), { recursive: true })
+    await writeFile(join(resources, 'python-runtime', 'bin', 'python3'), '#!/bin/sh\n', { mode: 0o755 })
+    await writeFile(join(resources, 'python-workers', 'document_parser', 'native_worker.py'), '# synthetic\n')
+    process.env.ALIASAI_PYTHON_COMMAND = '/synthetic/python'
+    process.env.ALIASAI_NATIVE_WORKER_PATH = '/synthetic/worker.py'
+
+    expect(resolvePythonRuntime(resources)).toEqual({ command: '/synthetic/python', args: ['/synthetic/worker.py'] })
+  })
+
+  it('fails closed when packaged resources are incomplete and no repo is discoverable', async () => {
+    delete process.env.ALIASAI_PYTHON_COMMAND
+    delete process.env.ALIASAI_NATIVE_WORKER_PATH
+    const resources = await mkdtemp(join(tmpdir(), 'aliasai-resources-'))
+    directories.push(resources)
+    await mkdir(join(resources, 'python-runtime', 'bin'), { recursive: true })
+    await writeFile(join(resources, 'python-runtime', 'bin', 'python3'), '#!/bin/sh\n', { mode: 0o755 })
+    // The worker script is missing: half a bundle must not resolve.
+    expect(resolvePackagedPythonResources(resources)).toBeUndefined()
+
+    const originalCwd = process.cwd()
+    try {
+      // Outside the repository no dev fallback exists either.
+      process.chdir(resources)
+      expect(() => resolvePythonRuntime(resources)).toThrow(PythonRuntimeError)
+    } finally {
+      process.chdir(originalCwd)
+    }
+  })
+
   it('initializes the full runtime against a temp user data directory', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'aliasai-runtime-'))
     directories.push(directory)
@@ -96,7 +157,7 @@ describe('desktop runtime', () => {
     process.env.ALIASAI_NATIVE_WORKER_PATH = resolve(process.cwd(), 'python/document_parser/native_worker.py')
 
     const runtime = await initializeRuntime(
-      { getPath: () => directory },
+      { getPath: () => directory, isPackaged: false },
       {
         isEncryptionAvailable: () => true,
         encryptString: (plainText: string) => Buffer.from(`encrypted:${plainText}`),

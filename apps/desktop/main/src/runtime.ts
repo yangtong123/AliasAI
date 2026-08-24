@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { MockAiProvider } from '@aliasai/ai'
 import { generateUuidV7 } from '@aliasai/crypto'
 import {
@@ -36,6 +37,8 @@ import { SafeStorageKeyStore, type SafeStorage } from './keys'
 /** The slice of Electron's app the runtime depends on; injectable for tests. */
 export interface AppLike {
   getPath(name: 'userData'): string
+  /** True inside a packaged install; enables bundled-resource resolution. */
+  readonly isPackaged: boolean
 }
 
 export interface AliasAiServices {
@@ -68,7 +71,7 @@ export interface AliasAiRuntime {
 export async function initializeRuntime(app: AppLike, safeStorage: SafeStorage): Promise<AliasAiRuntime> {
   const keys = await new SafeStorageKeyStore(app.getPath('userData'), safeStorage).load()
   const connection = openDatabase(join(app.getPath('userData'), 'aliasai.db'))
-  migrateDatabase(connection.db)
+  migrateDatabase(connection.db, resolveMigrationsFolder())
 
   const { sqlite, db } = connection
   const documents = new DocumentRepository(db)
@@ -84,7 +87,8 @@ export async function initializeRuntime(app: AppLike, safeStorage: SafeStorage):
     resolutionRepository,
     keys
   )
-  const documentWorker = resolveDocumentWorker()
+  const packagedResourcesPath = app.isPackaged ? process.resourcesPath : undefined
+  const documentWorker = resolveDocumentWorker(packagedResourcesPath)
   const services: AliasAiServices = {
     matters: new MatterService(new MatterRepository(db), keys),
     importDocs: new DocumentImportService(documents, keys),
@@ -140,6 +144,26 @@ export class PythonRuntimeError extends Error {
   }
 }
 
+/**
+ * Locates the Drizzle migrations for the running layout. In the bundled main
+ * process (dev `electron .` and packaged installs) they sit next to
+ * dist/main/index.cjs; unbundled test runs fall back to the repository's
+ * packages/database/drizzle.
+ */
+function resolveMigrationsFolder(): string {
+  const markers = ['meta', '_journal.json']
+  const isMigrationRoot = (directory: string): boolean => existsSync(join(directory, ...markers))
+  const bundleDirectory = dirname(fileURLToPath(import.meta.url))
+  const bundled = join(bundleDirectory, 'drizzle')
+  if (isMigrationRoot(bundled)) return bundled
+  const workspaceRoot = findWorkspaceRoot(bundleDirectory)
+  if (workspaceRoot !== undefined) {
+    const source = join(workspaceRoot, 'packages', 'database', 'drizzle')
+    if (isMigrationRoot(source)) return source
+  }
+  throw new Error('Database migrations are missing from this installation')
+}
+
 /** Marker file identifying the monorepo root. */
 const WORKSPACE_MARKER = 'pnpm-workspace.yaml'
 
@@ -159,20 +183,44 @@ function findWorkspaceRoot(startDirectory: string): string | undefined {
   return undefined
 }
 
-/** Resolves the Python command and native worker script; env overrides win. */
-export function resolvePythonRuntime(): { command: string; args: string[] } {
+export interface PackagedPythonResources {
+  readonly pythonCommand: string
+  readonly nativeWorkerPath: string
+}
+
+/**
+ * Locates the bundled Python runtime and native worker inside a packaged
+ * install's resources directory (extraResources: `python-runtime/` and
+ * `python-workers/`). Returns undefined when either piece is missing, so an
+ * incomplete or tampered bundle fails closed instead of half-resolving.
+ */
+export function resolvePackagedPythonResources(resourcesPath: string): PackagedPythonResources | undefined {
+  const pythonCommand = join(resourcesPath, 'python-runtime', 'bin', 'python3')
+  const nativeWorkerPath = join(resourcesPath, 'python-workers', 'document_parser', 'native_worker.py')
+  if (!existsSync(pythonCommand) || !existsSync(nativeWorkerPath)) return undefined
+  return { pythonCommand, nativeWorkerPath }
+}
+
+/**
+ * Resolves the Python command and native worker script. Env overrides win;
+ * a packaged install then resolves from its bundled resources; development
+ * falls back to repository workspace discovery.
+ */
+export function resolvePythonRuntime(packagedResourcesPath?: string): { command: string; args: string[] } {
   const command = process.env.ALIASAI_PYTHON_COMMAND
   const scriptPath = process.env.ALIASAI_NATIVE_WORKER_PATH
   if (command !== undefined && scriptPath !== undefined) {
     return { command, args: [scriptPath] }
   }
+  const packaged =
+    packagedResourcesPath === undefined ? undefined : resolvePackagedPythonResources(packagedResourcesPath)
   const workspaceRoot = findWorkspaceRoot(process.cwd())
-  const script = scriptPath ?? findWorkerScript(workspaceRoot)
-  const python = command ?? resolvePythonCommand(workspaceRoot)
+  const script = scriptPath ?? packaged?.nativeWorkerPath ?? findWorkerScript(workspaceRoot)
+  const python = command ?? packaged?.pythonCommand ?? resolvePythonCommand(workspaceRoot)
   if (script === undefined) {
     throw new PythonRuntimeError(
       'PYTHON_RUNTIME_UNAVAILABLE',
-      'The document parsing worker is not available. Set ALIASAI_PYTHON_COMMAND and ALIASAI_NATIVE_WORKER_PATH.'
+      'The document parsing worker is not available. Set ALIASAI_PYTHON_COMMAND and ALIASAI_NATIVE_WORKER_PATH, or reinstall the application: the bundled Python runtime is missing.'
     )
   }
   return { command: python, args: [script] }
@@ -190,13 +238,18 @@ export interface ResolvedDocumentWorker {
  * ALIASAI_OCR_WORKER_PATH is set, the OCR worker (render + PaddleOCR for
  * raster pages) is used with OCR enabled; otherwise the native PDF worker.
  */
-export function resolveDocumentWorker(): ResolvedDocumentWorker {
+export function resolveDocumentWorker(packagedResourcesPath?: string): ResolvedDocumentWorker {
   const ocrWorkerPath = process.env.ALIASAI_OCR_WORKER_PATH
   if (ocrWorkerPath === undefined) {
-    const runtime = resolvePythonRuntime()
+    const runtime = resolvePythonRuntime(packagedResourcesPath)
     return { command: runtime.command, args: runtime.args, parserType: 'NATIVE_PDF', enableOcr: false }
   }
-  const python = process.env.ALIASAI_PYTHON_COMMAND ?? resolvePythonCommand(findWorkspaceRoot(process.cwd()))
+  const packaged =
+    packagedResourcesPath === undefined ? undefined : resolvePackagedPythonResources(packagedResourcesPath)
+  const python =
+    process.env.ALIASAI_PYTHON_COMMAND ??
+    packaged?.pythonCommand ??
+    resolvePythonCommand(findWorkspaceRoot(process.cwd()))
   return { command: python, args: [ocrWorkerPath], parserType: 'OCR_PDF', enableOcr: true }
 }
 

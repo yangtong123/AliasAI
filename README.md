@@ -16,6 +16,22 @@ pnpm build
 
 Install the Python parser and test dependencies with `python3 -m pip install -e '.[dev]'`. Native PDF text parsing is implemented locally with the MIT-licensed `pdfminer.six`. An OCR worker for scanned PDFs (PaddleOCR + pypdfium2 rendering + optional OpenCV preprocessing) is available via the optional `ocr` extra (`python3 -m pip install -e '.[ocr]'`) and the `ALIASAI_OCR_WORKER_PATH` desktop setting. NER and real network AI providers remain intentionally out of scope; V1 uses the replaceable local `MockAiProvider`.
 
+## Building a distributable app (macOS)
+
+```sh
+pnpm --filter @aliasai/desktop package        # host arch: unpacked .app + zip in apps/desktop/release/
+pnpm --filter @aliasai/desktop package:arm64  # or package:x64
+```
+
+The bundle embeds a pinned standalone Python runtime and the native PDF worker, so testers need no repository, Node, or system Python. Verify a build with the contents audit and the packaged full-pipeline self-test:
+
+```sh
+node apps/desktop/scripts/audit-package.mjs
+apps/desktop/release/mac-arm64/AliasAI.app/Contents/MacOS/AliasAI --self-test
+```
+
+CI builds both architectures on every push to `main` and uploads the zips as artifacts. Details: [docs/packaging.md](docs/packaging.md).
+
 ## Package boundaries
 
 - `apps/desktop`: sandboxed Electron main process, narrow preload bridge, and React renderer shell.

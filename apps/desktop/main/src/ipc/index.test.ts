@@ -91,7 +91,7 @@ describe('IPC handler registry', () => {
     const directory = await mkdtemp(join(tmpdir(), 'aliasai-ipc-'))
     directories.push(directory)
     runtime = await initializeRuntime(
-      { getPath: () => directory },
+      { getPath: () => directory, isPackaged: false },
       {
         isEncryptionAvailable: () => true,
         encryptString: (plainText: string) => Buffer.from(`enc:${plainText}`),

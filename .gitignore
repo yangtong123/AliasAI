@@ -17,3 +17,10 @@ __pycache__/
 data/
 *.pem
 *.key
+
+# Packaging staging output (bundled Python runtime, built workers, installers).
+apps/desktop/build/
+apps/desktop/release/
+
+# ZCode session artifacts.
+.zcode/

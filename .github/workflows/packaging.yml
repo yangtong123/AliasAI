@@ -1,0 +1,50 @@
+name: Packaging
+
+# Builds the distributable macOS app (unpacked + zip), audits the package
+# contents, and runs the full-pipeline self-test against the packaged binary.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15 # arm64
+            arch: arm64
+          - runner: macos-15-intel # x64
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Package the app (unpacked + zip)
+        run: pnpm --filter @aliasai/desktop package:${{ matrix.arch }}
+      - name: Audit package contents
+        run: node apps/desktop/scripts/audit-package.mjs
+      - name: Self-test the packaged app
+        env:
+          # CI runners have no interactive keychain; the self-test only needs
+          # deterministic local encryption for its throwaway data directory.
+          ALIASAI_ALLOW_PLAINTEXT_KEYS: '1'
+        run: apps/desktop/release/mac*/AliasAI.app/Contents/MacOS/AliasAI --self-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AliasAI-macos-${{ matrix.arch }}
+          path: |
+            apps/desktop/release/AliasAI-*-mac.zip
+          retention-days: 14
+          if-no-files-found: error

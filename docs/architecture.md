@@ -95,9 +95,13 @@ is a documented development fallback.
 
 Known V1 limitations (deliberate):
 
-- The Python worker resolves from `ALIASAI_PYTHON_COMMAND` /
-  `ALIASAI_NATIVE_WORKER_PATH` or the repository `.venv`; packaged-app
-  (`asar`) resolution needs `extraResources` and is not implemented.
+- The Python worker resolves through one interface with three tiers: env
+  overrides (`ALIASAI_PYTHON_COMMAND` / `ALIASAI_NATIVE_WORKER_PATH`), the
+  packaged install's bundled runtime (`process.resourcesPath`:
+  `python-runtime/` + `python-workers/`, see `docs/packaging.md`), and the
+  repository `.venv` for development. The packaged bundle ships a pinned
+  standalone CPython with the native PDF worker only; it does not include the
+  OCR worker or its extras.
 - The OCR worker (`python/ocr/ocr_worker.py`) is opt-in via
   `ALIASAI_OCR_WORKER_PATH` and requires the optional `ocr` Python extras
   (PaddleOCR, pypdfium2, OpenCV, numpy). Without it, a document containing
@@ -106,6 +110,8 @@ Known V1 limitations (deliberate):
 - MIXED pages emit only their native text layer; image regions on mixed pages
   are not OCRed in V1.
 - Job progress is polled by the renderer; push events are a V2 concern.
+- macOS packages are unsigned (testers must bypass Gatekeeper explicitly);
+  signing, notarization, and auto-update are post-V1.
 
 ## Data Layers
 

@@ -4,11 +4,18 @@ packages:
 
 overrides:
   esbuild@<=0.24.2: 0.25.0
+  # app-builder-lib 26.15.3 declares "@electron/get": "^3.0.0" but requires
+  # the ElectronDownloadCacheMode export that only exists from 3.1.0; mirror
+  # metadata can otherwise satisfy the range with 3.0.0 and crash packaging.
+  "@electron/get@3.0.0": 3.1.0
 
-# Native dependencies used by the desktop runtime download or build local binaries.
+# Native dependencies used by the desktop runtime download or build local
+# binaries. electron-winstaller (Windows-only, pulled in by electron-builder)
+# never needs its install script on the platforms we build for.
 allowBuilds:
   better-sqlite3: true
   electron: true
+  electron-winstaller: false
   esbuild: true
 
 # Electron 43.4.0 is the audited security release selected for this bootstrap.
