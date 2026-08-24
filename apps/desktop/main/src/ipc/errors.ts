@@ -1,4 +1,5 @@
 import {
+  AiExecutionError,
   DocumentProcessingError,
   EntityResolutionError,
   PrivacyDetectionError,
@@ -19,6 +20,7 @@ interface CodedError {
 
 function isCodedError(error: unknown): error is CodedError {
   return (
+    error instanceof AiExecutionError ||
     error instanceof DocumentProcessingError ||
     error instanceof PrivacyDetectionError ||
     error instanceof EntityResolutionError ||

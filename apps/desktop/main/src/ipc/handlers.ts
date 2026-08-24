@@ -135,6 +135,26 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
           false
         )
         return services.preview.rehydrateDemo({ sanitizedDocumentId, text, includeRestoreOnRequest })
+      }),
+    'ai:execute': (payload) =>
+      toIpcResult(async () => {
+        const sanitizedDocumentId = requireId(readField(payload, 'sanitizedDocumentId'), 'sanitizedDocumentId')
+        const includeRestoreOnRequest = optionalBoolean(
+          readOptionalField(payload, 'includeRestoreOnRequest'),
+          'includeRestoreOnRequest',
+          false
+        )
+        return services.ai.execute(sanitizedDocumentId, includeRestoreOnRequest)
+      }),
+    'ai:latest': (payload) =>
+      toIpcResult(() => {
+        const sanitizedDocumentId = requireId(readField(payload, 'sanitizedDocumentId'), 'sanitizedDocumentId')
+        const includeRestoreOnRequest = optionalBoolean(
+          readOptionalField(payload, 'includeRestoreOnRequest'),
+          'includeRestoreOnRequest',
+          false
+        )
+        return services.ai.findLatest(sanitizedDocumentId, includeRestoreOnRequest) ?? null
       })
   }
 }

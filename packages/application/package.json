@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@aliasai/ai": "workspace:*",
     "@aliasai/crypto": "workspace:*",
     "@aliasai/database": "workspace:*",
     "@aliasai/document": "workspace:*",

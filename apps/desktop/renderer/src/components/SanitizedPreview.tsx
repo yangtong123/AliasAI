@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { SanitizedPreview } from '@aliasai/application'
 import { invoke } from '../api/client'
 import { useMutation } from '../api/hooks'
+import { AiExecutionPanel } from './AiExecutionPanel'
 
 export function SanitizedPreviewView(props: {
   readonly documentId: string
@@ -53,26 +54,10 @@ export function SanitizedPreviewView(props: {
           {block.text}
         </p>
       ))}
-      <table className="mappings">
-        <thead>
-          <tr>
-            <th>Alias</th>
-            <th>Token</th>
-            <th>Restore policy</th>
-          </tr>
-        </thead>
-        <tbody>
-          {preview.mappings.map((mapping) => (
-            <tr key={mapping.mentionId}>
-              <td>{mapping.alias}</td>
-              <td>
-                <code>{mapping.publicToken}</code>
-              </td>
-              <td>{mapping.restorePolicy}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+
+      {/* Remounting per document keeps AI execution state (results, pending,
+          errors) from ever bleeding across documents. */}
+      <AiExecutionPanel key={preview.sanitizedDocumentId} sanitizedDocumentId={preview.sanitizedDocumentId} />
 
       <h4>Local rehydration demo</h4>
       <p className="hint">

@@ -62,7 +62,7 @@ These rules are V1 architecture constraints. Do not silently violate or redefine
 11. Entity merge never physically deletes the merged Entity.
 12. Merged Entities preserve a redirect to their canonical Entity.
 13. Protected values must not be persisted as plaintext.
-14. Rehydration prefers Public Tokens over aliases.
+14. Rehydration prefers value-level restoration tokens over aliases.
 15. Merge, split, assign, reassign, confirm, and constraint changes create ResolutionEvents.
 16. OCR/parser code must not write directly to application database tables.
 
@@ -90,10 +90,10 @@ These rules are V1 architecture constraints. Do not silently violate or redefine
 
 ## Pseudonymization Principles
 
-- Internal Entity ID, Public Token, and human-readable Alias are separate concepts.
-- Public Tokens are Matter-scoped and randomly generated; do not derive them from real identity values.
-- Example sanitized form: `原告甲〔@P-8K3F7A〕`.
-- Alias exists for readability; Public Token is the stable restoration anchor.
+- Internal Entity ID, Entity Public Token, value-level restoration token, and human-readable Alias are separate concepts.
+- Entity Public Tokens and ProtectedValue restoration tokens are Matter-scoped and randomly generated; do not derive either from real identity values.
+- Example sanitized form: `原告甲〔@N-8K3F7A2B〕`.
+- Alias exists for readability; the ProtectedValue restoration token is the stable rehydration anchor, while the Entity Public Token is an identity anchor.
 - Sanitization works from Mention -> Entity -> replacement policy, not raw string replacement.
 - Different protected-value types may have different restore policies.
 

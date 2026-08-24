@@ -1,7 +1,9 @@
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { MockAiProvider } from '@aliasai/ai'
 import { generateUuidV7 } from '@aliasai/crypto'
 import {
+  AiExecutionService,
   DocumentImportService,
   DocumentProcessingService,
   EntityResolutionService,
@@ -16,6 +18,7 @@ import {
   type ApplicationKeys
 } from '@aliasai/application'
 import {
+  AiExecutionRepository,
   DocumentRepository,
   EntityRepository,
   EntityResolutionRepository,
@@ -47,6 +50,7 @@ export interface AliasAiServices {
   readonly reviewQuery: ReviewQueryService
   readonly reviewOperations: ReviewOperationService
   readonly preview: SanitizedPreviewService
+  readonly ai: AiExecutionService
 }
 
 export interface AliasAiRuntime {
@@ -71,6 +75,7 @@ export async function initializeRuntime(app: AppLike, safeStorage: SafeStorage):
   const entities = new EntityRepository(db)
   const resolutionRepository = new EntityResolutionRepository(db)
   const sanitizationRepository = new SanitizationRepository(db)
+  const rehydration = new RehydrationService(sanitizationRepository, keys)
 
   const reviewQuery = new ReviewQueryService(
     new ReviewQueryRepository(db),
@@ -103,7 +108,7 @@ export async function initializeRuntime(app: AppLike, safeStorage: SafeStorage):
     ),
     entityService: new EntityService(entities, keys),
     sanitization: new PseudonymizationService(sanitizationRepository, keys),
-    rehydration: new RehydrationService(sanitizationRepository, keys),
+    rehydration,
     reviewQuery,
     reviewOperations: new ReviewOperationService(
       new EntityResolutionService(resolutionRepository, new ProtectedValueRepository(db), entities, keys),
@@ -114,9 +119,10 @@ export async function initializeRuntime(app: AppLike, safeStorage: SafeStorage):
       new ReviewQueryRepository(db),
       sanitizationRepository,
       new PseudonymizationService(sanitizationRepository, keys),
-      new RehydrationService(sanitizationRepository, keys),
+      rehydration,
       keys
-    )
+    ),
+    ai: new AiExecutionService(new AiExecutionRepository(db), rehydration, new MockAiProvider(), keys)
   }
 
   const close = () => sqlite.close()

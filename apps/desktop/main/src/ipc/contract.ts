@@ -1,4 +1,5 @@
 import type {
+  AiExecutionView,
   ConstraintDTO,
   DocumentReviewDTO,
   DocumentSummaryDTO,
@@ -61,6 +62,14 @@ export interface AliasAiInvokeMap {
     request: { sanitizedDocumentId: string; text: string; includeRestoreOnRequest?: boolean }
     response: RehydrationResult
   }
+  'ai:execute': {
+    request: { sanitizedDocumentId: string; includeRestoreOnRequest?: boolean }
+    response: Extract<AiExecutionView, { status: 'COMPLETED' }>
+  }
+  'ai:latest': {
+    request: { sanitizedDocumentId: string; includeRestoreOnRequest?: boolean }
+    response: AiExecutionView | null
+  }
 }
 
 export type AliasAiChannel = keyof AliasAiInvokeMap & string
@@ -83,5 +92,7 @@ export const ALIASAI_CHANNELS: readonly AliasAiChannel[] = [
   'review:addConstraint',
   'preview:get',
   'preview:generate',
-  'preview:rehydrate'
+  'preview:rehydrate',
+  'ai:execute',
+  'ai:latest'
 ]

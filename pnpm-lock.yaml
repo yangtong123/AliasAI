@@ -47,6 +47,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@aliasai/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@aliasai/application':
         specifier: workspace:*
         version: link:../../packages/application
@@ -112,10 +115,20 @@ importers:
         specifier: ^8.0.3
         version: 8.0.3
 
-  packages/ai: {}
+  packages/ai:
+    dependencies:
+      '@aliasai/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@aliasai/entity-resolution':
+        specifier: workspace:*
+        version: link:../entity-resolution
 
   packages/application:
     dependencies:
+      '@aliasai/ai':
+        specifier: workspace:*
+        version: link:../ai
       '@aliasai/crypto':
         specifier: workspace:*
         version: link:../crypto

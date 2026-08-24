@@ -409,6 +409,46 @@ ProtectedValue's value-level restoration token (one per value type of an Entity)
 not the Entity's Public Token. Rehydration resolves the real value lazily from the
 ProtectedValue ciphertext; the vault stores no plaintext.
 
+### ai_executions
+
+Append-preserving provider execution history over immutable sanitized artifacts.
+
+| Column | Type | Constraints |
+|---|---|---|
+| id | TEXT | PK |
+| matter_id | TEXT | FK matters(id), NOT NULL |
+| sanitized_document_id | TEXT | FK sanitized_documents(id), NOT NULL |
+| provider_id | TEXT | NOT NULL |
+| status | TEXT | NOT NULL, CHECK IN ('RUNNING','COMPLETED','FAILED') |
+| request_cipher | BLOB | NOT NULL |
+| response_cipher | BLOB | nullable |
+| error_cipher | BLOB | nullable |
+| created_at | INTEGER | NOT NULL |
+| started_at | INTEGER | NOT NULL |
+| finished_at | INTEGER | nullable |
+
+Indexes:
+
+- `idx_ai_executions_sanitized_document(sanitized_document_id, created_at)`
+- `idx_ai_executions_matter(matter_id, created_at)`
+- `idx_ai_executions_status(status)`
+
+The lifecycle CHECK requires RUNNING rows to have no terminal fields, COMPLETED
+rows to have exactly `response_cipher`, and FAILED rows to have exactly
+`error_cipher`. The insert triggers require new rows to start in RUNNING state
+with a source artifact in the same Matter whose Document remains SANITIZED. The
+update trigger permits exactly one immutable RUNNING-to-terminal transition and
+freezes every identity field; delete is rejected.
+
+Authenticated encryption contexts are row- and field-specific:
+
+- request: `<ai-execution-id>:aiExecution.request`
+- sanitized provider response: `<ai-execution-id>:aiExecution.response`
+- code-only failure payload: `<ai-execution-id>:aiExecution.error`
+
+The table never stores a rehydrated response. Rehydration is recomputed locally so
+real identity text is not duplicated into provider-history rows.
+
 ### processing_jobs
 
 | Column | Type | Constraints |

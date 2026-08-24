@@ -428,13 +428,25 @@ Do not store raw decrypted protected values in analytics/debug logs.
 The implemented V1 workflow deliberately covers only the deterministic core:
 
 - **Normalization** (matching/fingerprinting only, never overwrites source text):
-  NFKC plus whitespace collapsing for every type; EMAIL lowercases; PHONE strips
-  separators and a `+86`/`86` prefix before an 11-digit mobile; ID_CARD removes
-  whitespace and uppercases the check character; BANK_ACCOUNT keeps digits only.
-  Values that fail validation never produce a fingerprint or a hard rule: every
-  type rejects empty text, and ID_CARD additionally requires full GB 11643-1999
-  validation (18-character shape, a valid calendar birth date, and the ISO 7064
-  MOD 11-2 check digit) before it may trigger a hard identity rule.
+  NFKC plus whitespace collapsing for every type; EMAIL lowercases; the digit
+  types share one grammar defined in `@aliasai/entity-resolution` and never
+  collapse internal whitespace — non-ASCII Unicode decimal digits fold to
+  ASCII using a mapping derived from the engine's own `\p{Nd}` data (every Nd
+  decade, including astral scripts such as Osmanya and the chained
+  Mathematical digit styles), one leading `+` is dropped, and the shared
+  separator set (spaces, dashes, dots, slashes, parentheses,
+  commas/colons/semicolons, ideographic comma, zero-width characters) is
+  removed before PHONE drops a `+86`/`86` prefix before an 11-digit mobile,
+  ID_CARD uppercases the check character, and BANK_ACCOUNT keeps digits.
+  Any other character — prose, tabs, newlines — glued into the value is
+  preserved so validation rejects it: digit extraction is never more
+  permissive than the outbound leak scanner's boundary grammar, which uses
+  the same shared set and treats those characters as hard boundaries too.
+  Values that fail validation never produce a fingerprint or a hard rule:
+  every type rejects empty text, PHONE requires 5–20 digits, BANK_ACCOUNT
+  requires 8–30 digits, and ID_CARD additionally requires full GB 11643-1999
+  validation (18-character shape, a valid calendar birth date, and the ISO
+  7064 MOD 11-2 check digit) before it may trigger a hard identity rule.
 - **Fingerprinting**: `HMAC-SHA256(matter_search_key, normalized_value)` where the
   Matter search key is derived from the application search key per Matter. Entity
   Resolution computes and backfills Mention fingerprints during resolution.

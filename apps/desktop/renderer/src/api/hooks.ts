@@ -130,7 +130,13 @@ export function useSanitizedPreview(
   return { preview, error }
 }
 
-/** Wraps a mutation with in-flight and error state; never throws to callers. */
+/**
+ * Wraps a mutation with in-flight and error state; never throws to callers.
+ * The shared state belongs to the most recent invocation only: when a new run
+ * starts, a superseded invocation can neither clear its pending flag nor
+ * install its error, so an older policy's late failure never surfaces under a
+ * newer one that is still in flight.
+ */
 export function useMutation<Arguments extends unknown[], Result>(
   action: (...args: Arguments) => Promise<Result>
 ): {
@@ -140,18 +146,22 @@ export function useMutation<Arguments extends unknown[], Result>(
 } {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<UiError | null>(null)
+  const latestInvocationRef = useRef(0)
 
   const run = useCallback(
     async (...args: Arguments): Promise<Result | null> => {
+      const invocation = ++latestInvocationRef.current
       setPending(true)
       setError(null)
       try {
         return await action(...args)
       } catch (failure) {
-        setError(failure instanceof UiError ? failure : new UiError('INTERNAL_ERROR', 'An internal error occurred'))
+        if (invocation === latestInvocationRef.current) {
+          setError(failure instanceof UiError ? failure : new UiError('INTERNAL_ERROR', 'An internal error occurred'))
+        }
         return null
       } finally {
-        setPending(false)
+        if (invocation === latestInvocationRef.current) setPending(false)
       }
     },
     [action]

@@ -2,5 +2,10 @@
   "name": "@aliasai/ai",
   "version": "0.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@aliasai/domain": "workspace:*",
+    "@aliasai/entity-resolution": "workspace:*"
+  }
 }

@@ -44,11 +44,12 @@ Electron Desktop
 
 V1 intentionally keeps privacy core and AI network access inside the same Electron main process to reduce implementation complexity. Module boundaries must still prevent AI provider code from depending on Mapping Vault internals.
 
-## Review UI V1 (Step 9)
+## Review and AI UI V1 (Steps 9–10)
 
 The desktop review workflow is the first operable local loop: create a Matter,
-import a PDF, run parse → detect → resolve, review mentions, and generate the
-sanitized preview with a local rehydration demo (no AI provider yet).
+import a PDF, run parse → detect → resolve, review mentions, generate the
+sanitized preview, send that persisted artifact to the local Mock AI provider,
+and compare the sanitized response with its locally rehydrated result.
 
 Layering and boundary rules:
 
@@ -79,6 +80,12 @@ Layering and boundary rules:
   transaction (assign/reassign/confirm/create-and-assign all reject mentions
   whose Document is SANITIZING or SANITIZED), so a direct IPC call cannot
   desynchronize the review state from the persisted artifact.
+- **AI boundary**: the renderer sends only a `sanitizedDocumentId`; the main
+  process reloads the immutable artifact from SQLite. The `AiProvider` receives
+  exactly `{ content }`, never a Matter/Document/Entity/Mention ID, key, mapping,
+  restore policy, or ProtectedValue. The Mapping Vault is absent from preview and
+  AI IPC DTOs. The renderer may display the final locally restored text, but it
+  cannot retrieve the mapping or perform restoration itself.
 
 Key bootstrap: main generates the persistence and search keys on first run and
 persists them via Electron `safeStorage` (OS keychain) in `userData`. The
@@ -215,6 +222,23 @@ restoration token aborts the SANITIZE job, so no sendable artifact can be produc
 from partially resolved input. The Mapping Vault stores only pseudonym metadata
 (restoration token, alias, effective restore policy); real values stay encrypted
 and are resolved lazily during local rehydration.
+
+The AI path is a separate application boundary:
+
+```text
+encrypted Sanitized Blocks -> AIExecutionService -> decrypt locally
+                           -> fail-closed outbound privacy scan
+                           -> AiProvider { content } -> sanitized response
+                           -> encrypted ai_executions row
+                           -> local RehydrationService -> renderer result
+```
+
+The request is persisted encrypted before dispatch for local auditability, but no
+provider call occurs until the outbound scanner accepts it. The scanner requires
+the exact artifact token set and rejects ProtectedValue plaintext, internal row
+identifiers, malformed tokens, unknown tokens, and missing restoration tokens.
+Failures persist only a stable encrypted code. V1 ships a deterministic local Mock
+provider; a future network provider must implement the same narrow port.
 
 ## Key Architectural Decisions
 

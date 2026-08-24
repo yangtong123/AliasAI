@@ -1,4 +1,5 @@
 import type {
+  AiExecution,
   Document,
   DocumentBlock,
   DocumentPage,
@@ -250,6 +251,35 @@ export function assertSanitizationMapping(value: SanitizationMapping): void {
     throw new DomainInvariantError('sanitizationMapping.restorePolicy is not supported')
   }
   requireNonNegativeInteger(value.createdAt, 'sanitizationMapping.createdAt')
+}
+
+const AI_EXECUTION_STATUSES = new Set(['RUNNING', 'COMPLETED', 'FAILED'])
+
+export function assertAiExecution(value: AiExecution): void {
+  requireIdentifier(value.id, 'aiExecution.id')
+  requireIdentifier(value.matterId, 'aiExecution.matterId')
+  requireIdentifier(value.sanitizedDocumentId, 'aiExecution.sanitizedDocumentId')
+  requireIdentifier(value.providerId, 'aiExecution.providerId')
+  if (!AI_EXECUTION_STATUSES.has(value.status)) {
+    throw new DomainInvariantError('aiExecution.status is not supported')
+  }
+  requireNonNegativeInteger(value.createdAt, 'aiExecution.createdAt')
+  requireNonNegativeInteger(value.startedAt, 'aiExecution.startedAt')
+  if (value.startedAt < value.createdAt) {
+    throw new DomainInvariantError('aiExecution.startedAt must not precede createdAt')
+  }
+  if (value.finishedAt !== undefined) {
+    requireNonNegativeInteger(value.finishedAt, 'aiExecution.finishedAt')
+    if (value.finishedAt < value.startedAt) {
+      throw new DomainInvariantError('aiExecution.finishedAt must not precede startedAt')
+    }
+  }
+  if (value.status === 'RUNNING' && value.finishedAt !== undefined) {
+    throw new DomainInvariantError('running AI execution must not be finished')
+  }
+  if (value.status !== 'RUNNING' && value.finishedAt === undefined) {
+    throw new DomainInvariantError('terminal AI execution requires finishedAt')
+  }
 }
 
 export function assertEntityRelationship(relationship: EntityRelationship): void {

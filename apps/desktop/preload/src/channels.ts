@@ -19,7 +19,9 @@ export const CHANNELS = [
   'review:addConstraint',
   'preview:get',
   'preview:generate',
-  'preview:rehydrate'
+  'preview:rehydrate',
+  'ai:execute',
+  'ai:latest'
 ] as const
 
 export type Channel = (typeof CHANNELS)[number]

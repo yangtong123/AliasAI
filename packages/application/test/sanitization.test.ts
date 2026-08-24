@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { decrypt, deriveMatterSearchKey, encrypt, fingerprintNormalizedValue, generateProtectedValueToken, generatePublicToken } from '@aliasai/crypto'
 import type { Entity, EntityType, MentionStrength, MentionType, ProtectedValueType } from '@aliasai/domain'
 import type { MentionProposal, PrivacyDetector } from '@aliasai/privacy-detection'
@@ -408,6 +408,37 @@ describe('PseudonymizationService and RehydrationService', () => {
     expect(onRequest.text).toContain(`Tampered〔${emailToken}〕`)
     expect(onRequest.text).toContain('@P-UNK0WN')
     expect(onRequest.unresolvedTokens).toEqual(['@P-UNK0WN', emailToken].sort())
+  })
+
+  it('loads entity aliases once per entity during a single rehydration', async () => {
+    const { documentId, matterId } = seedParsedDocument(['Reach Synthetic Name via synthetic@example.test.'])
+    const holder = seedEntity(matterId, 'PERSON', 'Holder One')
+    await runDetection(
+      documentId,
+      detectorFor([
+        { type: 'PERSON', text: 'Synthetic Name' },
+        { type: 'EMAIL', text: 'synthetic@example.test' }
+      ])
+    )
+    await makeResolution().resolve(documentId)
+    // Both mentions resolve to the same Entity, producing two mappings that
+    // must not trigger two alias lookups.
+    for (const row of query(
+      "SELECT id FROM mentions WHERE document_id = ? AND mention_type IN ('PERSON', 'EMAIL')",
+      documentId
+    ) as Array<{ id: string }>) {
+      makeResolution().assign(row.id, holder.id)
+    }
+    const sanitized = await makeSanitizer().sanitize(documentId)
+
+    const aliasesSpy = vi.spyOn(sanitization, 'findEntityAliases')
+    makeRehydration().rehydrate({
+      sanitizedDocumentId: sanitized.sanitizedDocument.id,
+      text: sanitizedBlockTexts(sanitized.sanitizedDocument.id).join('\n'),
+      includeRestoreOnRequest: true
+    })
+    expect(aliasesSpy).toHaveBeenCalledTimes(1)
+    expect(aliasesSpy).toHaveBeenCalledWith(matterId, holder.id)
   })
 
   it('never restores NEVER_RESTORE values even on request', async () => {

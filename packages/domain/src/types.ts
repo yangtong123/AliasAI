@@ -202,6 +202,23 @@ export interface SanitizationMapping {
   readonly createdAt: number
 }
 
+export type AiExecutionStatus = 'RUNNING' | 'COMPLETED' | 'FAILED'
+
+/**
+ * One provider invocation over an immutable SanitizedDocument. Request and
+ * response text are encrypted persistence fields and intentionally omitted.
+ */
+export interface AiExecution {
+  readonly id: string
+  readonly matterId: string
+  readonly sanitizedDocumentId: string
+  readonly providerId: string
+  readonly status: AiExecutionStatus
+  readonly createdAt: number
+  readonly startedAt: number
+  readonly finishedAt?: number
+}
+
 export interface EntityRelationship {
   readonly id: string
   readonly matterId: string

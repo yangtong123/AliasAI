@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DomainInvariantError,
+  assertAiExecution,
   assertDocument,
   assertDocumentBlock,
   assertEntity,
@@ -16,7 +17,15 @@ import {
   confirmMentionAssignment,
   mergeEntity
 } from '../src/index'
-import type { Document, Entity, Mention, SanitizationMapping, SanitizedBlock, SanitizedDocument } from '../src/index'
+import type {
+  AiExecution,
+  Document,
+  Entity,
+  Mention,
+  SanitizationMapping,
+  SanitizedBlock,
+  SanitizedDocument
+} from '../src/index'
 
 const activeEntity: Entity = {
   id: 'entity-a',
@@ -60,6 +69,16 @@ const sanitizedDocument: SanitizedDocument = {
   documentId: 'document-1',
   jobId: 'job-1',
   createdAt: 1
+}
+
+const aiExecution: AiExecution = {
+  id: 'ai-execution-1',
+  matterId: 'matter-1',
+  sanitizedDocumentId: 'sanitized-document-1',
+  providerId: 'mock-v1',
+  status: 'RUNNING',
+  createdAt: 1,
+  startedAt: 1
 }
 
 const sanitizedBlock: SanitizedBlock = {
@@ -314,6 +333,25 @@ describe('domain invariants', () => {
     ).toThrow('sanitizationMapping.restorePolicy is not supported')
     expect(() => assertSanitizationMapping({ ...sanitizationMapping, createdAt: -1 })).toThrow(
       'sanitizationMapping.createdAt must be a non-negative safe integer'
+    )
+  })
+
+  it('enforces the AI execution lifecycle', () => {
+    expect(() => assertAiExecution(aiExecution)).not.toThrow()
+    expect(() =>
+      assertAiExecution({ ...aiExecution, status: 'COMPLETED', finishedAt: 2 })
+    ).not.toThrow()
+    expect(() => assertAiExecution({ ...aiExecution, providerId: '' })).toThrow(
+      'aiExecution.providerId must not be empty'
+    )
+    expect(() => assertAiExecution({ ...aiExecution, status: 'COMPLETED' })).toThrow(
+      'terminal AI execution requires finishedAt'
+    )
+    expect(() => assertAiExecution({ ...aiExecution, finishedAt: 2 })).toThrow(
+      'running AI execution must not be finished'
+    )
+    expect(() => assertAiExecution({ ...aiExecution, startedAt: 0 })).toThrow(
+      'aiExecution.startedAt must not precede createdAt'
     )
   })
 })

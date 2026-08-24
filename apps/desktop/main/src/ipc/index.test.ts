@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ReviewQueryError } from '@aliasai/application'
+import { AiExecutionError, ReviewQueryError } from '@aliasai/application'
 import { initializeRuntime, type AliasAiRuntime } from '../runtime'
 import { createHandlerRegistry, type HandlerRegistry } from './handlers'
 import { ALIASAI_CHANNELS } from './contract'
@@ -61,6 +61,21 @@ describe('IPC error sanitization', () => {
     expect(JSON.stringify(result)).not.toContain('110101199003077774')
   })
 
+  it('surfaces static AI execution errors without their sensitive cause', async () => {
+    const result = await toIpcResult(() => {
+      throw new AiExecutionError('OUTBOUND_LEAK_DETECTED', 'AI request failed privacy verification', {
+        cause: new Error('张伟 /private/client.pdf')
+      })
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: 'OUTBOUND_LEAK_DETECTED', message: 'AI request failed privacy verification' }
+    })
+    expect(JSON.stringify(result)).not.toContain('张伟')
+    expect(JSON.stringify(result)).not.toContain('client.pdf')
+  })
+
   it('returns data on success', async () => {
     expect(await toIpcResult(() => 42)).toEqual({ ok: true, data: 42 })
   })
@@ -117,6 +132,20 @@ describe('IPC handler registry', () => {
     const result = await registry['review:getDocument']({ documentId: 'missing-document' })
 
     expect(result).toEqual({ ok: false, error: { code: 'DOCUMENT_NOT_FOUND', message: 'Document was not found' } })
+  })
+
+  it('validates the narrow AI channels without exposing provider internals', async () => {
+    expect(await registry['ai:latest']({ sanitizedDocumentId: 'missing-sanitized' })).toEqual({
+      ok: true,
+      data: null
+    })
+    expect(await registry['ai:execute']({ sanitizedDocumentId: 'missing-sanitized' })).toEqual({
+      ok: false,
+      error: {
+        code: 'SANITIZED_DOCUMENT_NOT_AVAILABLE',
+        message: 'Sanitized Document is not available for AI'
+      }
+    })
   })
 
   it('registers every channel on a fake ipcMain with the aliasai prefix', () => {

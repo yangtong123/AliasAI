@@ -20,6 +20,7 @@ Core objects:
 - EntityConstraint
 - ResolutionEvent
 - ProcessingJob
+- AiExecution
 
 ## Matter
 
@@ -144,6 +145,40 @@ Rehydration is a local read-only operation over the Mapping Vault: the value-lev
 restoration token is the lookup anchor, aliases only identify the wrapped span,
 values below the caller's requested policy level stay pseudonymized, and unknown
 or tampered tokens remain verbatim and are reported for manual review.
+
+## AiExecution
+
+One provider invocation over one immutable persisted SanitizedDocument. Request,
+response, and error fields are encrypted persistence concerns and do not belong in
+the pure domain object.
+
+```ts
+type AiExecutionStatus = 'RUNNING' | 'COMPLETED' | 'FAILED'
+
+interface AiExecution {
+  id: string
+  matterId: string
+  sanitizedDocumentId: string
+  providerId: string
+  status: AiExecutionStatus
+  createdAt: number
+  startedAt: number
+  finishedAt?: number
+}
+```
+
+Lifecycle:
+
+```text
+RUNNING -> COMPLETED
+       `-> FAILED
+```
+
+An execution cannot change provider, Matter, source artifact, request, or start
+timestamps after insert and permits exactly one terminal transition. A COMPLETED
+row has one encrypted sanitized response; a FAILED row has one encrypted code-only
+error payload. Rehydration is deliberately not part of persisted provider output:
+it is recomputed locally from the immutable sanitized response and Mapping Vault.
 
 ## DocumentPage
 

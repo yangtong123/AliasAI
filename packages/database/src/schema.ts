@@ -12,6 +12,7 @@ import {
   type AnySQLiteColumn
 } from 'drizzle-orm/sqlite-core'
 import type {
+  AiExecutionStatus,
   AliasType,
   BlockSource,
   BlockType,
@@ -550,6 +551,56 @@ export const sanitizationMappings = sqliteTable(
   ]
 )
 
+export const aiExecutions = sqliteTable(
+  'ai_executions',
+  {
+    id: text('id').primaryKey(),
+    matterId: text('matter_id')
+      .notNull()
+      .references(() => matters.id),
+    sanitizedDocumentId: text('sanitized_document_id')
+      .notNull()
+      .references(() => sanitizedDocuments.id),
+    providerId: text('provider_id').notNull(),
+    status: text('status').$type<AiExecutionStatus>().notNull(),
+    requestCipher: encrypted('request_cipher'),
+    responseCipher: blob('response_cipher', { mode: 'buffer' }),
+    errorCipher: blob('error_cipher', { mode: 'buffer' }),
+    createdAt: timestamp('created_at'),
+    startedAt: timestamp('started_at'),
+    finishedAt: integer('finished_at')
+  },
+  (table) => [
+    index('idx_ai_executions_sanitized_document').on(table.sanitizedDocumentId, table.createdAt),
+    index('idx_ai_executions_matter').on(table.matterId, table.createdAt),
+    index('idx_ai_executions_status').on(table.status),
+    check('ai_executions_status_allowed', sql`${table.status} IN ('RUNNING', 'COMPLETED', 'FAILED')`),
+    check(
+      'ai_executions_timestamps_ordered',
+      sql`${table.startedAt} >= ${table.createdAt} AND (${table.finishedAt} IS NULL OR ${table.finishedAt} >= ${table.startedAt})`
+    ),
+    check(
+      'ai_executions_lifecycle_consistent',
+      sql`(
+        ${table.status} = 'RUNNING'
+        AND ${table.finishedAt} IS NULL
+        AND ${table.responseCipher} IS NULL
+        AND ${table.errorCipher} IS NULL
+      ) OR (
+        ${table.status} = 'COMPLETED'
+        AND ${table.finishedAt} IS NOT NULL
+        AND ${table.responseCipher} IS NOT NULL
+        AND ${table.errorCipher} IS NULL
+      ) OR (
+        ${table.status} = 'FAILED'
+        AND ${table.finishedAt} IS NOT NULL
+        AND ${table.responseCipher} IS NULL
+        AND ${table.errorCipher} IS NOT NULL
+      )`
+    )
+  ]
+)
+
 export const schema = {
   matters,
   documents,
@@ -568,5 +619,6 @@ export const schema = {
   processingJobs,
   sanitizedDocuments,
   sanitizedBlocks,
-  sanitizationMappings
+  sanitizationMappings,
+  aiExecutions
 }

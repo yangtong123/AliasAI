@@ -1,6 +1,18 @@
 import type { Entity, EntityType, MentionStrength, MentionType } from '@aliasai/domain'
 
-export { isValidNormalizedValue, mentionTypeToProtectedValueType, normalizeMentionValue } from './normalization'
+export {
+  BANK_ACCOUNT_MAX_DIGITS,
+  BANK_ACCOUNT_MIN_DIGITS,
+  MIN_DIGIT_EQUIVALENCE_LENGTH,
+  NUMBER_GROUP_SEPARATOR_CHARS,
+  PHONE_MAX_DIGITS,
+  dropMainlandCountryPrefix,
+  foldDecimalDigits,
+  isValidNormalizedValue,
+  mentionTypeToProtectedValueType,
+  normalizeMentionValue,
+  normalizeProtectedValue
+} from './normalization'
 
 export type ResolutionDecision = 'AUTO_LINK' | 'REVIEW' | 'NEW_ENTITY' | 'UNRESOLVED'
 export type HardRule = 'MUST_LINK' | 'CANNOT_LINK'

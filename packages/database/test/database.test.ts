@@ -146,6 +146,7 @@ describe('SQLite schema and repositories', () => {
       .all() as Array<{ name: string }>
 
     expect(tables.map((table) => table.name).sort()).toEqual([
+      'ai_executions',
       'document_blocks',
       'document_pages',
       'documents',

@@ -240,6 +240,17 @@ export class RehydrationService {
 
   rehydrate(input: RehydrationInput): RehydrationResult {
     const tokenToTarget = new Map<string, RehydrationTarget>()
+    // Several mappings often point at the same Entity; load its aliases once.
+    const aliasesByEntity = new Map<string, readonly string[]>()
+    const aliasesFor = (matterId: string, entityId: string): readonly string[] => {
+      const key = `${matterId}:${entityId}`
+      let aliases = aliasesByEntity.get(key)
+      if (aliases === undefined) {
+        aliases = this.sanitization.findEntityAliases(matterId, entityId)
+        aliasesByEntity.set(key, aliases)
+      }
+      return aliases
+    }
     for (const mapping of this.sanitization.findRehydrationMappings(input.sanitizedDocumentId)) {
       if (mapping.restorePolicy === 'NEVER_RESTORE') continue
       if (mapping.restorePolicy === 'RESTORE_ON_REQUEST' && input.includeRestoreOnRequest !== true) continue
@@ -254,7 +265,7 @@ export class RehydrationService {
       try {
         tokenToTarget.set(mapping.publicToken, {
           value: valueBytes.toString('utf8'),
-          aliases: this.sanitization.findEntityAliases(mapping.matterId, mapping.entityId)
+          aliases: aliasesFor(mapping.matterId, mapping.entityId)
         })
       } finally {
         valueBytes.fill(0)

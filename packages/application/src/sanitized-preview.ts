@@ -42,12 +42,6 @@ export type SanitizedPreview =
         readonly readingOrder: number
         readonly text: string
       }[]
-      readonly mappings: readonly {
-        readonly mentionId: string
-        readonly alias: string
-        readonly publicToken: string
-        readonly restorePolicy: string
-      }[]
     }
 
 /**
@@ -104,7 +98,6 @@ export class SanitizedPreviewService {
     const sourceBlocks = this.review.findReviewBlocks(documentId)
     const sourceByBlockId = new Map(sourceBlocks.map((block) => [block.id, block]))
     const blocks = this.sanitization.findSanitizedBlocks(sanitizedDocumentId)
-    const mappings = this.sanitization.findRehydrationMappings(sanitizedDocumentId)
     return {
       status: 'AVAILABLE',
       sanitizedDocumentId,
@@ -114,12 +107,6 @@ export class SanitizedPreviewService {
         pageNo: sourceByBlockId.get(block.blockId)?.pageNo ?? 0,
         readingOrder: sourceByBlockId.get(block.blockId)?.readingOrder ?? 0,
         text: this.decryptText(block.textCipher, sanitizedBlockTextContext(block.id), 'SANITIZED_BLOCK')
-      })),
-      mappings: mappings.map((mapping) => ({
-        mentionId: mapping.mentionId,
-        alias: mapping.alias,
-        publicToken: mapping.publicToken,
-        restorePolicy: mapping.restorePolicy
       }))
     }
   }

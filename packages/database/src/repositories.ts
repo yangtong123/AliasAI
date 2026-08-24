@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, ne } from 'drizzle-orm'
 import type {
+  AiExecution,
   Document,
   DocumentBlock,
   DocumentPage,
@@ -21,6 +22,7 @@ import type {
   SanitizedDocument
 } from '@aliasai/domain'
 import {
+  assertAiExecution,
   assertDocument,
   assertDocumentBlock,
   assertDocumentPage,
@@ -39,6 +41,7 @@ import {
 } from '@aliasai/domain'
 import type { AliasAiDatabase } from './client'
 import {
+  aiExecutions,
   documentBlocks,
   documentPages,
   documents,
@@ -2531,7 +2534,9 @@ export class SanitizationRepository {
     return this.db
       .select({
         mapping: sanitizationMappings,
+        mentionEntityId: mentions.entityId,
         protectedValueId: protectedValues.id,
+        protectedValuePublicToken: protectedValues.publicToken,
         valueCipher: protectedValues.valueCipher
       })
       .from(sanitizationMappings)
@@ -2540,11 +2545,16 @@ export class SanitizationRepository {
       .where(eq(sanitizationMappings.sanitizedDocumentId, sanitizedDocumentId))
       .orderBy(asc(mentions.startOffset), asc(sanitizationMappings.id))
       .all()
-      .map(({ mapping, protectedValueId, valueCipher }) => ({
-        ...toSanitizationMapping(mapping),
-        protectedValueId,
-        valueCipher
-      }))
+      .map(({ mapping, mentionEntityId, protectedValueId, protectedValuePublicToken, valueCipher }) => {
+        if (mentionEntityId !== mapping.entityId || protectedValuePublicToken !== mapping.publicToken) {
+          throw new Error('Sanitization mapping no longer matches its immutable Mention assignment')
+        }
+        return {
+          ...toSanitizationMapping(mapping),
+          protectedValueId,
+          valueCipher
+        }
+      })
   }
 
   findEntityAliases(matterId: string, entityId: string): readonly string[] {
@@ -2561,5 +2571,233 @@ export class SanitizationRepository {
     const row = this.db.select().from(processingJobs).where(eq(processingJobs.id, id)).get()
     if (row === undefined) throw new Error('ProcessingJob was not found')
     return toProcessingJob(row)
+  }
+}
+
+/** Encrypted Matter-wide ProtectedValue row feeding the outbound leak denylist. */
+export interface MatterProtectedValueCipher {
+  readonly id: string
+  readonly valueType: ProtectedValueType
+  readonly valueCipher: Buffer
+}
+
+export interface AiExecutionSource {
+  readonly sanitizedDocument: SanitizedDocument
+  readonly blocks: readonly SanitizedBlockWithCipher[]
+  readonly mappings: readonly RehydrationMappingSource[]
+  /**
+   * Every ProtectedValue in the Matter, not only this artifact's mappings. The
+   * outbound scan denies all of them so a detection miss in this document cannot
+   * leak a value already known from another document in the same Matter.
+   */
+  readonly matterDenylist: readonly MatterProtectedValueCipher[]
+  /** Complete set of local row identifiers that must never cross the provider boundary. */
+  readonly internalIdentifiers: readonly string[]
+}
+
+export interface CreateAiExecutionInput {
+  readonly execution: AiExecution
+  readonly requestCipher: Buffer
+}
+
+export type AiExecutionRecord = AiExecution & {
+  readonly requestCipher: Buffer
+  readonly responseCipher?: Buffer
+  readonly errorCipher?: Buffer
+}
+
+type AiExecutionRow = typeof aiExecutions.$inferSelect
+
+function toAiExecutionRecord(row: AiExecutionRow): AiExecutionRecord {
+  const execution: AiExecution = {
+    id: row.id,
+    matterId: row.matterId,
+    sanitizedDocumentId: row.sanitizedDocumentId,
+    providerId: row.providerId,
+    status: row.status,
+    createdAt: row.createdAt,
+    startedAt: row.startedAt,
+    ...(row.finishedAt === null ? {} : { finishedAt: row.finishedAt })
+  }
+  assertAiExecution(execution)
+  return {
+    ...execution,
+    requestCipher: row.requestCipher,
+    ...(row.responseCipher === null ? {} : { responseCipher: row.responseCipher }),
+    ...(row.errorCipher === null ? {} : { errorCipher: row.errorCipher })
+  }
+}
+
+/** Owns encrypted AI request/response persistence and its one-way execution lifecycle. */
+export class AiExecutionRepository {
+  constructor(private readonly db: AliasAiDatabase) {}
+
+  findSource(sanitizedDocumentId: string): AiExecutionSource | undefined {
+    const source = this.db
+      .select({ sanitizedDocument: sanitizedDocuments, documentStatus: documents.parseStatus })
+      .from(sanitizedDocuments)
+      .innerJoin(documents, eq(documents.id, sanitizedDocuments.documentId))
+      .where(eq(sanitizedDocuments.id, sanitizedDocumentId))
+      .get()
+    if (source === undefined || source.documentStatus !== 'SANITIZED') return undefined
+
+    const sanitizedDocument = toSanitizedDocument(source.sanitizedDocument)
+    const blocks = this.db
+      .select({ block: sanitizedBlocks })
+      .from(sanitizedBlocks)
+      .innerJoin(documentBlocks, eq(documentBlocks.id, sanitizedBlocks.blockId))
+      .innerJoin(documentPages, eq(documentPages.id, sanitizedBlocks.pageId))
+      .where(eq(sanitizedBlocks.sanitizedDocumentId, sanitizedDocumentId))
+      .orderBy(asc(documentPages.pageNo), asc(documentBlocks.readingOrder), asc(sanitizedBlocks.id))
+      .all()
+      .map(({ block }) => toSanitizedBlockWithCipher(block))
+    const mappings = this.db
+      .select({
+        mapping: sanitizationMappings,
+        mentionEntityId: mentions.entityId,
+        protectedValueId: protectedValues.id,
+        protectedValuePublicToken: protectedValues.publicToken,
+        valueCipher: protectedValues.valueCipher
+      })
+      .from(sanitizationMappings)
+      .innerJoin(mentions, eq(mentions.id, sanitizationMappings.mentionId))
+      .innerJoin(protectedValues, eq(protectedValues.id, mentions.protectedValueId))
+      .where(eq(sanitizationMappings.sanitizedDocumentId, sanitizedDocumentId))
+      .orderBy(asc(mentions.startOffset), asc(sanitizationMappings.id))
+      .all()
+      .map(({ mapping, mentionEntityId, protectedValueId, protectedValuePublicToken, valueCipher }) => {
+        if (mentionEntityId !== mapping.entityId || protectedValuePublicToken !== mapping.publicToken) {
+          throw new Error('Sanitization mapping no longer matches its immutable Mention assignment')
+        }
+        return {
+          ...toSanitizationMapping(mapping),
+          protectedValueId,
+          valueCipher
+        }
+      })
+
+    // One row past the application denylist cap (MAX_OUTBOUND_DENIED_VALUES
+    // in packages/application/src/ai-execution.ts) so an abnormal Matter is
+    // detectable without paying an unbounded read.
+    const matterDenylist = this.db
+      .select({ id: protectedValues.id, valueType: protectedValues.valueType, valueCipher: protectedValues.valueCipher })
+      .from(protectedValues)
+      .where(eq(protectedValues.matterId, sanitizedDocument.matterId))
+      .limit(2049)
+      .all()
+
+    const internalIdentifiers = new Set<string>([
+      sanitizedDocument.id,
+      sanitizedDocument.matterId,
+      sanitizedDocument.documentId,
+      sanitizedDocument.jobId
+    ])
+    for (const block of blocks) {
+      internalIdentifiers.add(block.id)
+      internalIdentifiers.add(block.sanitizedDocumentId)
+      internalIdentifiers.add(block.documentId)
+      internalIdentifiers.add(block.pageId)
+      internalIdentifiers.add(block.blockId)
+    }
+    for (const mapping of mappings) {
+      internalIdentifiers.add(mapping.id)
+      internalIdentifiers.add(mapping.matterId)
+      internalIdentifiers.add(mapping.sanitizedDocumentId)
+      internalIdentifiers.add(mapping.mentionId)
+      internalIdentifiers.add(mapping.entityId)
+      internalIdentifiers.add(mapping.protectedValueId)
+    }
+    return { sanitizedDocument, blocks, mappings, matterDenylist, internalIdentifiers: [...internalIdentifiers] }
+  }
+
+  begin(input: CreateAiExecutionInput): AiExecutionRecord {
+    assertAiExecution(input.execution)
+    if (input.execution.status !== 'RUNNING') throw new Error('AI execution must begin in RUNNING state')
+    if (input.requestCipher.length === 0) throw new Error('AI execution requestCipher must not be empty')
+    return this.db.transaction((transaction) => {
+      const source = transaction
+        .select({ matterId: sanitizedDocuments.matterId, documentStatus: documents.parseStatus })
+        .from(sanitizedDocuments)
+        .innerJoin(documents, eq(documents.id, sanitizedDocuments.documentId))
+        .where(eq(sanitizedDocuments.id, input.execution.sanitizedDocumentId))
+        .get()
+      if (
+        source === undefined ||
+        source.matterId !== input.execution.matterId ||
+        source.documentStatus !== 'SANITIZED'
+      ) {
+        throw new Error('AI execution source is not an available Sanitized Document in the same Matter')
+      }
+      transaction
+        .insert(aiExecutions)
+        .values({
+          id: input.execution.id,
+          matterId: input.execution.matterId,
+          sanitizedDocumentId: input.execution.sanitizedDocumentId,
+          providerId: input.execution.providerId,
+          status: input.execution.status,
+          requestCipher: input.requestCipher,
+          createdAt: input.execution.createdAt,
+          startedAt: input.execution.startedAt
+        })
+        .run()
+      const inserted = transaction.select().from(aiExecutions).where(eq(aiExecutions.id, input.execution.id)).get()
+      if (inserted === undefined) throw new Error('AI execution was not found after insert')
+      return toAiExecutionRecord(inserted)
+    })
+  }
+
+  complete(executionId: string, responseCipher: Buffer, finishedAt: number): AiExecutionRecord {
+    if (responseCipher.length === 0) throw new Error('AI execution responseCipher must not be empty')
+    return this.finish(executionId, 'COMPLETED', finishedAt, responseCipher)
+  }
+
+  fail(executionId: string, errorCipher: Buffer, finishedAt: number): AiExecutionRecord {
+    if (errorCipher.length === 0) throw new Error('AI execution errorCipher must not be empty')
+    return this.finish(executionId, 'FAILED', finishedAt, errorCipher)
+  }
+
+  findById(executionId: string): AiExecutionRecord | undefined {
+    const row = this.db.select().from(aiExecutions).where(eq(aiExecutions.id, executionId)).get()
+    return row === undefined ? undefined : toAiExecutionRecord(row)
+  }
+
+  findLatest(sanitizedDocumentId: string): AiExecutionRecord | undefined {
+    const row = this.db
+      .select()
+      .from(aiExecutions)
+      .where(eq(aiExecutions.sanitizedDocumentId, sanitizedDocumentId))
+      .orderBy(desc(aiExecutions.createdAt), desc(aiExecutions.id))
+      .limit(1)
+      .get()
+    return row === undefined ? undefined : toAiExecutionRecord(row)
+  }
+
+  private finish(
+    executionId: string,
+    status: 'COMPLETED' | 'FAILED',
+    finishedAt: number,
+    cipher: Buffer
+  ): AiExecutionRecord {
+    return this.db.transaction((transaction) => {
+      const current = transaction.select().from(aiExecutions).where(eq(aiExecutions.id, executionId)).get()
+      if (current === undefined || current.status !== 'RUNNING') throw new Error('AI execution is not running')
+      if (!Number.isSafeInteger(finishedAt) || finishedAt < current.startedAt) {
+        throw new Error('AI execution finishedAt must not precede startedAt')
+      }
+      const result = transaction
+        .update(aiExecutions)
+        .set(
+          status === 'COMPLETED'
+            ? { status, responseCipher: cipher, finishedAt }
+            : { status, errorCipher: cipher, finishedAt }
+        )
+        .where(and(eq(aiExecutions.id, executionId), eq(aiExecutions.status, 'RUNNING')))
+        .run()
+      if (result.changes !== 1) throw new Error('AI execution state changed before completion')
+      const completed = transaction.select().from(aiExecutions).where(eq(aiExecutions.id, executionId)).get()
+      if (completed === undefined) throw new Error('AI execution was not found after completion')
+      return toAiExecutionRecord(completed)
+    })
   }
 }

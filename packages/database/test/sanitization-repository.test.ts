@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  AiExecutionRepository,
   DocumentRepository,
   EntityRepository,
   EntityResolutionRepository,
@@ -14,6 +15,7 @@ import {
   type SqliteClient
 } from '../src/index'
 import type { Entity, SanitizationMapping, SanitizedBlock, SanitizedDocument } from '@aliasai/domain'
+import type { AiExecution } from '@aliasai/domain'
 
 const cipher = (value: string) => Buffer.from(`synthetic:${value}`)
 
@@ -27,6 +29,7 @@ describe('SanitizationRepository', () => {
   let entities: EntityRepository
   let resolution: EntityResolutionRepository
   let sanitization: SanitizationRepository
+  let aiExecutions: AiExecutionRepository
 
   beforeEach(() => {
     sqlite = new Database(':memory:')
@@ -36,6 +39,7 @@ describe('SanitizationRepository', () => {
     entities = new EntityRepository(db)
     resolution = new EntityResolutionRepository(db)
     sanitization = new SanitizationRepository(db)
+    aiExecutions = new AiExecutionRepository(db)
     new MatterRepository(db).create({
       id: 'matter-1',
       nameCipher: cipher('matter-name'),
@@ -254,6 +258,22 @@ describe('SanitizationRepository', () => {
       finishedAt: 12,
       ...overrides
     }
+  }
+
+  function seedAiSource(documentId = 'document-ai'): string {
+    const { mentionA, mentionB } = seedReadyDocument(documentId)
+    const sanitizedId = `sanitized-${documentId}`
+    sanitization.begin({ documentId, jobId: `sanitize-${documentId}`, startedAt: 10 })
+    sanitization.complete(
+      completeInput(documentId, {
+        blocks: [sanitizedBlock(documentId, 'b'), sanitizedBlock(documentId, 'a')],
+        mappings: [
+          mapping(documentId, 'b', mentionB, `entity-b-${documentId}`),
+          mapping(documentId, 'a', mentionA, `entity-a-${documentId}`)
+        ]
+      })
+    )
+    return sanitizedId
   }
 
   function expectStillSanitizing(documentId: string): void {
@@ -676,6 +696,156 @@ describe('SanitizationRepository', () => {
       ])
       expect(sanitization.findEntityAliases('matter-1', 'entity-b-document-1')).toEqual(['Alias entity-b-document-1'])
       expect(sanitization.findEntityAliases('matter-2', 'entity-a-document-1')).toEqual([])
+    })
+
+    it('fails closed if a persisted mapping no longer matches its Mention assignment', () => {
+      seedSanitizedDocument()
+      sqlite
+        .prepare("UPDATE mentions SET protected_value_id = 'pv-b-document-1' WHERE id = 'mention-a-document-1'")
+        .run()
+
+      expect(() => sanitization.findRehydrationMappings('sanitized-document-1')).toThrow(
+        'Sanitization mapping no longer matches its immutable Mention assignment'
+      )
+    })
+  })
+
+  describe('AI executions', () => {
+    function runningExecution(id: string, sanitizedDocumentId: string, overrides: Partial<AiExecution> = {}): AiExecution {
+      return {
+        id,
+        matterId: 'matter-1',
+        sanitizedDocumentId,
+        providerId: 'mock-v1',
+        status: 'RUNNING',
+        createdAt: 20,
+        startedAt: 20,
+        ...overrides
+      }
+    }
+
+    it('returns the complete encrypted provider source in document order', () => {
+      seedReadyDocument('document-other')
+      const sanitizedDocumentId = seedAiSource()
+
+      const source = aiExecutions.findSource(sanitizedDocumentId)
+
+      expect(source?.sanitizedDocument).toMatchObject({
+        id: sanitizedDocumentId,
+        matterId: 'matter-1',
+        documentId: 'document-ai'
+      })
+      expect(source?.blocks.map((block) => block.blockId)).toEqual([
+        'block-a-document-ai',
+        'block-b-document-ai'
+      ])
+      expect(source?.mappings.map((mapping) => mapping.mentionId)).toEqual([
+        'mention-a-document-ai',
+        'mention-b-document-ai'
+      ])
+      expect(source?.internalIdentifiers).toEqual(
+        expect.arrayContaining([
+          'matter-1',
+          'document-ai',
+          'sanitized-document-ai',
+          'sblock-a-document-ai',
+          'block-a-document-ai',
+          'mention-a-document-ai',
+          'entity-a-document-ai',
+          'pv-a-document-ai'
+        ])
+      )
+      // The denylist is Matter-wide: it includes values from another document
+      // in the same Matter, not only this artifact's own mappings.
+      expect(source?.matterDenylist.map((denied) => denied.id)).toEqual(
+        expect.arrayContaining(['pv-a-document-other', 'pv-a-document-ai', 'pv-b-document-ai'])
+      )
+      expect(source?.matterDenylist.every((denied) => denied.valueType === 'PERSON_NAME')).toBe(true)
+    })
+
+    it('caps the Matter denylist read at one row past the application limit', () => {
+      const sanitizedDocumentId = seedAiSource()
+      const insert = sqlite.prepare(
+        `INSERT INTO protected_values (id, matter_id, value_type, value_cipher, fingerprint, public_token, restore_policy, created_at)
+         VALUES (?, 'matter-1', 'PERSON_NAME', X'01', ?, ?, 'ALWAYS_RESTORE', 1)`
+      )
+      for (let index = 0; index < 2100; index += 1) {
+        insert.run(`pv-flood-${index}`, Buffer.from(`fingerprint:pv-flood-${index}`), valueToken(`pv-flood-${index}`))
+      }
+
+      // The repository returns at most 2049 rows (one past the application
+      // denylist cap) so an abnormal Matter is detectable without paying an
+      // unbounded read.
+      expect(aiExecutions.findSource(sanitizedDocumentId)!.matterDenylist).toHaveLength(2049)
+    })
+
+    it('persists an encrypted request and performs one terminal completion transition', () => {
+      const sanitizedDocumentId = seedAiSource()
+      const execution = runningExecution('ai-1', sanitizedDocumentId)
+
+      expect(aiExecutions.begin({ execution, requestCipher: cipher('request') })).toMatchObject(execution)
+      expect(aiExecutions.findLatest(sanitizedDocumentId)).toMatchObject({
+        id: 'ai-1',
+        status: 'RUNNING',
+        requestCipher: cipher('request')
+      })
+
+      const completed = aiExecutions.complete('ai-1', cipher('response'), 21)
+      expect(completed).toMatchObject({
+        id: 'ai-1',
+        status: 'COMPLETED',
+        responseCipher: cipher('response'),
+        finishedAt: 21
+      })
+      expect(() => aiExecutions.complete('ai-1', cipher('other'), 22)).toThrow('AI execution is not running')
+      expect(() => sqlite.prepare(`UPDATE ai_executions SET finished_at = 99 WHERE id = 'ai-1'`).run()).toThrow(
+        'AI execution permits one immutable terminal transition'
+      )
+      expect(() => sqlite.prepare(`DELETE FROM ai_executions WHERE id = 'ai-1'`).run()).toThrow(
+        'AI executions are append-preserving'
+      )
+    })
+
+    it('records a code-only encrypted failure and rejects cross-Matter sources', () => {
+      const sanitizedDocumentId = seedAiSource()
+      aiExecutions.begin({ execution: runningExecution('ai-failed', sanitizedDocumentId), requestCipher: cipher('request') })
+      expect(aiExecutions.fail('ai-failed', cipher('error-code'), 21)).toMatchObject({
+        status: 'FAILED',
+        errorCipher: cipher('error-code')
+      })
+
+      insertMatter('matter-2')
+      expect(() =>
+        aiExecutions.begin({
+          execution: runningExecution('ai-cross', sanitizedDocumentId, { matterId: 'matter-2' }),
+          requestCipher: cipher('request')
+        })
+      ).toThrow('AI execution source is not an available Sanitized Document in the same Matter')
+      expect(aiExecutions.findById('ai-cross')).toBeUndefined()
+    })
+
+    it('enforces Matter scope and sanitized state for direct SQL inserts', () => {
+      const sanitizedDocumentId = seedAiSource()
+      insertMatter('matter-2')
+      expect(() =>
+        sqlite
+          .prepare(
+            `INSERT INTO ai_executions
+               (id, matter_id, sanitized_document_id, provider_id, status, request_cipher,
+                response_cipher, created_at, started_at, finished_at)
+             VALUES ('ai-terminal', 'matter-1', ?, 'mock-v1', 'COMPLETED', X'01', X'02', 20, 20, 21)`
+          )
+          .run(sanitizedDocumentId)
+      ).toThrow('AI execution must start in RUNNING state')
+      expect(() =>
+        sqlite
+          .prepare(
+            `INSERT INTO ai_executions
+               (id, matter_id, sanitized_document_id, provider_id, status, request_cipher, created_at, started_at)
+             VALUES ('ai-cross', 'matter-2', ?, 'mock-v1', 'RUNNING', X'01', 20, 20)`
+          )
+          .run(sanitizedDocumentId)
+      ).toThrow('AI execution must reference a sanitized Document in the same Matter')
     })
   })
 

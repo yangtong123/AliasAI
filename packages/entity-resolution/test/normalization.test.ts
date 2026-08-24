@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { isValidNormalizedValue, mentionTypeToProtectedValueType, normalizeMentionValue } from '../src/normalization'
+import {
+  foldDecimalDigits,
+  isValidNormalizedValue,
+  mentionTypeToProtectedValueType,
+  normalizeMentionValue
+} from '../src/normalization'
 import type { MentionType, ProtectedValueType } from '@aliasai/domain'
 
 describe('mentionTypeToProtectedValueType', () => {
@@ -52,6 +57,82 @@ describe('normalizeMentionValue', () => {
 
   it('keeps only digits for bank accounts', () => {
     expect(normalizeMentionValue('BANK_ACCOUNT', '6222 0212 3456 7890')).toBe('6222021234567890')
+  })
+
+  it('treats comma, colon, and semicolon group separators as part of one rendered number', () => {
+    expect(normalizeMentionValue('PHONE', '138:0013:8000')).toBe('13800138000')
+    expect(normalizeMentionValue('PHONE', '138；0013；8000')).toBe('13800138000')
+    expect(normalizeMentionValue('BANK_ACCOUNT', '6222,0210,0110,1234')).toBe('6222021001101234')
+    expect(normalizeMentionValue('BANK_ACCOUNT', '6222、0210、0110、1234')).toBe('6222021001101234')
+  })
+
+  it('keeps tab and newline boundaries inside digit values so validation rejects them', () => {
+    // Tabs and newlines are hard candidate boundaries for the outbound
+    // scanner; normalization must not collapse them into joinable spaces.
+    const tabSeparated = normalizeMentionValue('PHONE', '1380\t013\t8000')
+    expect(tabSeparated).toBe('1380\t013\t8000')
+    expect(isValidNormalizedValue('PHONE', tabSeparated)).toBe(false)
+    const lineBroken = normalizeMentionValue('PHONE', '1380\n013\t8000')
+    expect(lineBroken).toBe('1380\n013\t8000')
+    expect(isValidNormalizedValue('PHONE', lineBroken)).toBe(false)
+    // Leading and trailing whitespace still trims, and multi-space inside a
+    // number stays joinable: both spaces are shared separators.
+    expect(normalizeMentionValue('PHONE', '  138  0013 8000 ')).toBe('13800138000')
+  })
+
+  it('folds non-ASCII decimal digits to ASCII on the digit types', () => {
+    expect(normalizeMentionValue('PHONE', '١٣٨٠٠١٣٨٠٠٠')).toBe('13800138000')
+    expect(normalizeMentionValue('PHONE', '۱۳۸۰۰۱۳۸۰۰۰')).toBe('13800138000')
+    expect(normalizeMentionValue('BANK_ACCOUNT', '۶۲۲۲۰۲۱۰۰۱۱۰۱۲۳۴')).toBe('6222021001101234')
+    // Osmanya digits are astral-plane; the fold must cover every Nd block,
+    // not only the common BMP scripts.
+    expect(normalizeMentionValue('PHONE', '𐒡𐒣𐒨𐒠𐒠𐒡𐒣𐒨𐒠𐒠𐒠')).toBe('13800138000')
+  })
+
+  it('folds every Unicode Nd digit deterministically (exhaustive contract)', () => {
+    const decimal = /^\p{Nd}$/u
+    const anchors = new Map([
+      ['5', '5'],
+      ['٨', '8'], // Arabic-Indic
+      ['۵', '5'], // Extended Arabic-Indic
+      ['𝟘', '0'], // Mathematical double-struck (adjacent chained decade)
+      ['𐒠', '0'], // Osmanya (astral)
+      ['９', '9'] // Fullwidth
+    ])
+    let previous = -2
+    let runStart = -1
+    let runLength = 0
+    let blockCount = 0
+    // Independent derivation: every Nd block is a ten-code-point 0–9 decade;
+    // adjacent decades (for example the chained Mathematical digit styles)
+    // form longer consecutive runs, so the offset inside the run taken modulo
+    // ten is the digit value.
+    for (let codePoint = 0; codePoint <= 0x10ffff; codePoint += 1) {
+      const char = String.fromCodePoint(codePoint)
+      if (!decimal.test(char)) continue
+      if (codePoint !== previous + 1) {
+        if (blockCount > 0) expect(runLength % 10).toBe(0)
+        runStart = codePoint
+        runLength = 0
+        blockCount += 1
+      }
+      runLength += 1
+      const expected = String.fromCharCode(0x30 + ((codePoint - runStart) % 10))
+      expect(foldDecimalDigits(char)).toBe(expected)
+      const anchor = anchors.get(char)
+      if (anchor !== undefined) expect(foldDecimalDigits(char)).toBe(anchor)
+      previous = codePoint
+    }
+    expect(runLength % 10).toBe(0)
+    // Current engines ship 70+ Nd blocks; a collapse to the ASCII-only block
+    // would mean the derived fold silently stopped covering non-ASCII digits.
+    expect(blockCount).toBeGreaterThan(60)
+  })
+
+  it('preserves prose glued into a rendered number so validation rejects it', () => {
+    const normalized = normalizeMentionValue('PHONE', '电话:13800138000')
+    expect(normalized).toBe('电话13800138000')
+    expect(isValidNormalizedValue('PHONE', normalized)).toBe(false)
   })
 
   it('applies only the generic rule to metadata types', () => {
@@ -108,12 +189,14 @@ describe('isValidNormalizedValue', () => {
     expect(isValidNormalizedValue('ID_CARD', `${futureBase}${'10X98765432'[sum % 11]}`)).toBe(false)
   })
 
-  it('accepts mainland mobiles and digit lines of at least 5 digits', () => {
+  it('accepts mainland mobiles and digit lines of 5 to 20 digits', () => {
     expect(isValidNormalizedValue('PHONE', '13800138000')).toBe(true)
     expect(isValidNormalizedValue('PHONE', '861088886666')).toBe(true)
     expect(isValidNormalizedValue('PHONE', '12345')).toBe(true)
     expect(isValidNormalizedValue('PHONE', '23800138000')).toBe(true)
     expect(isValidNormalizedValue('PHONE', '1234')).toBe(false)
+    expect(isValidNormalizedValue('PHONE', '1'.repeat(20))).toBe(true)
+    expect(isValidNormalizedValue('PHONE', '1'.repeat(21))).toBe(false)
     expect(isValidNormalizedValue('PHONE', '1380013800a')).toBe(false)
   })
 

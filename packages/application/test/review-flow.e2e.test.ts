@@ -3,7 +3,9 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { MockAiProvider } from '@aliasai/ai'
 import {
+  AiExecutionRepository,
   DocumentRepository,
   EntityRepository,
   EntityResolutionRepository,
@@ -19,6 +21,7 @@ import {
 } from '@aliasai/database'
 import { PythonWorkerClient, PythonWorkerDocumentProcessor } from '@aliasai/python-bridge'
 import {
+  AiExecutionService,
   DocumentImportService,
   DocumentProcessingService,
   EntityResolutionService,
@@ -107,7 +110,7 @@ describe('review flow end to end', () => {
 
   const now = () => timestamp++
 
-  it('runs PDF -> Block -> Mention -> Review -> Entity -> Sanitized Preview -> Rehydration', async () => {
+  it('runs PDF -> Block -> Mention -> Entity -> Sanitization -> Mock AI -> Rehydration', async () => {
     // Import a synthetic PDF into a fresh Matter.
     const directory = await mkdtemp(join(tmpdir(), 'aliasai-review-e2e-'))
     directories.push(directory)
@@ -176,10 +179,57 @@ describe('review flow end to end', () => {
     expect(sanitized).not.toContain('110101199003077774')
     expect(sanitized).not.toContain('synthetic@example.test')
     expect(sanitized.match(/〔@[IET]-[A-Z0-9]+〕/g)).toHaveLength(2)
-    expect(generated.mappings.map((mapping) => mapping.restorePolicy).sort()).toEqual([
-      'RESTORE_ON_REQUEST',
-      'RESTORE_ON_REQUEST'
-    ])
+    expect('mappings' in generated).toBe(false)
+
+    // The provider receives one string containing only the persisted sanitized
+    // artifact. Its response is encrypted, then rehydrated locally.
+    let outbound = ''
+    const ai = new AiExecutionService(
+      new AiExecutionRepository(db),
+      new RehydrationService(new SanitizationRepository(db), keys),
+      new MockAiProvider((content) => {
+        outbound = content
+        return `AI analysis: ${content}`
+      }),
+      keys,
+      now
+    )
+    const aiResult = await ai.execute(generated.sanitizedDocumentId, true)
+    expect(outbound).toBe(sanitized)
+    expect(outbound).not.toContain('110101199003077774')
+    expect(outbound).not.toContain('synthetic@example.test')
+    expect(aiResult.sanitizedResponse).toBe(`AI analysis: ${sanitized}`)
+    expect(aiResult.rehydratedResponse).toContain('110101199003077774')
+    expect(aiResult.rehydratedResponse).toContain('synthetic@example.test')
+    expect(aiResult.unresolvedTokens).toEqual([])
+    const persistedAi = sqlite
+      .prepare('SELECT status, request_cipher, response_cipher, error_cipher FROM ai_executions WHERE id = ?')
+      .get(aiResult.id) as { status: string; request_cipher: Buffer; response_cipher: Buffer; error_cipher: Buffer | null }
+    expect(persistedAi.status).toBe('COMPLETED')
+    expect(persistedAi.request_cipher.includes(Buffer.from(sanitized))).toBe(false)
+    expect(persistedAi.response_cipher.includes(Buffer.from(`AI analysis: ${sanitized}`))).toBe(false)
+    expect(persistedAi.request_cipher.includes(Buffer.from('110101199003077774'))).toBe(false)
+    expect(persistedAi.response_cipher.includes(Buffer.from('synthetic@example.test'))).toBe(false)
+    expect(persistedAi.error_cipher).toBeNull()
+
+    // Reading the persisted execution back must default to withholding
+    // RESTORE_ON_REQUEST values: no sensitive value is restored unless the
+    // local caller explicitly asks for it.
+    const latest = ai.findLatest(generated.sanitizedDocumentId)
+    expect(latest).toMatchObject({ id: aiResult.id, status: 'COMPLETED', providerId: 'mock-v1' })
+    if (latest?.status !== 'COMPLETED') throw new Error('latest AI execution must be COMPLETED')
+    expect(latest.sanitizedResponse).toBe(`AI analysis: ${sanitized}`)
+    expect(latest.rehydratedResponse).not.toContain('110101199003077774')
+    expect(latest.rehydratedResponse).not.toContain('synthetic@example.test')
+    const expectedWithheldTokens = (sanitized.match(/〔@[IET]-[A-Z0-9]+〕/g) ?? []).map((ref) => ref.slice(1, -1))
+    expect(latest.unresolvedTokens).toEqual([...expectedWithheldTokens].sort())
+
+    // A fresh execution with the default policy must also withhold: execute()
+    // defaults includeRestoreOnRequest to false end to end.
+    const aiDefault = await ai.execute(generated.sanitizedDocumentId)
+    expect(aiDefault.rehydratedResponse).not.toContain('110101199003077774')
+    expect(aiDefault.rehydratedResponse).not.toContain('synthetic@example.test')
+    expect(aiDefault.unresolvedTokens).toEqual([...expectedWithheldTokens].sort())
 
     // Simulated AI round trip: withheld by default, restored on request.
     const aiEcho = `当事人:${sanitized}`

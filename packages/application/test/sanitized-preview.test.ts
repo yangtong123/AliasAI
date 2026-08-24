@@ -77,7 +77,7 @@ describe('SanitizedPreviewService', () => {
     ])
   })
 
-  it('generates the preview and exposes pseudonym-only mappings and the rehydration demo', async () => {
+  it('generates the preview without exposing Mapping Vault rows and supports local rehydration', async () => {
     seedReadyDocument({ assignEmail: true, assignPhone: true, phoneHasToken: true })
 
     const generated = await preview.generatePreview('document-1')
@@ -88,12 +88,7 @@ describe('SanitizedPreviewService', () => {
     expect(sanitized).not.toContain('synthetic@example.test')
     expect(sanitized).not.toContain('13800138000')
     expect(sanitized.match(/〔@[NET]-[A-Z0-9]+〕/g)).toHaveLength(2)
-    // Mappings expose policy metadata only, never plaintext.
-    expect(generated.mappings).toHaveLength(2)
-    for (const mapping of generated.mappings) {
-      expect(sanitized).toContain(`${mapping.alias}〔${mapping.publicToken}〕`)
-      expect(mapping.restorePolicy).toBe('RESTORE_ON_REQUEST')
-    }
+    expect('mappings' in generated).toBe(false)
     expect(JSON.stringify(generated)).not.toContain('synthetic@example.test')
 
     // Rehydration demo: restored on request, withheld by default.

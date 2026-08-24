@@ -205,21 +205,25 @@ button.mention.selected {
   padding: 0;
 }
 
-.mappings {
-  border-collapse: collapse;
-  margin-top: 12px;
-}
-
-.mappings th,
-.mappings td {
-  border: 1px solid #263650;
-  padding: 4px 12px;
-  text-align: left;
-}
-
 .preview textarea {
   width: 100%;
   margin: 8px 0;
+}
+
+.ai-execution {
+  margin: 20px 0;
+  padding: 12px;
+  border: 1px solid #263650;
+  border-radius: 8px;
+}
+
+.ai-results pre {
+  white-space: pre-wrap;
+  color: #e8edf7;
+  background: #16202f;
+  border: 1px solid #263650;
+  border-radius: 6px;
+  padding: 10px;
 }
 
 .demo-result {
