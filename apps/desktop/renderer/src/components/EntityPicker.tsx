@@ -1,6 +1,7 @@
 import type { EntitySummaryDTO } from '@aliasai/application'
 import { invoke } from '../api/client'
 import { useMutation } from '../api/hooks'
+import { useI18n } from '../i18n'
 
 /** Reassigns the mention to any other entity in the matter. */
 export function EntityPicker(props: {
@@ -9,15 +10,16 @@ export function EntityPicker(props: {
   readonly entities: readonly EntitySummaryDTO[]
   readonly onApplied: () => void
 }) {
+  const { t, label, formatError } = useI18n()
   const assign = useMutation((entityId: string) => invoke('review:assign', { mentionId: props.mentionId, entityId }))
   const others = props.entities.filter((entity) => entity.id !== props.currentEntityId)
 
-  if (others.length === 0) return <p className="empty">No other entities</p>
+  if (others.length === 0) return <p className="empty">{t('entity.noOther')}</p>
 
   return (
     <div className="entity-picker">
       <label>
-        Reassign to
+        {t('entity.reassign')}
         <select
           defaultValue=""
           onChange={(event) => {
@@ -32,16 +34,16 @@ export function EntityPicker(props: {
           }}
         >
           <option value="" disabled>
-            Choose entity…
+            {t('entity.choose')}
           </option>
           {others.map((entity) => (
             <option key={entity.id} value={entity.id}>
-              {entity.primaryAlias ?? entity.publicToken} ({entity.type})
+              {entity.primaryAlias ?? entity.publicToken} ({label(entity.type)})
             </option>
           ))}
         </select>
       </label>
-      {assign.error !== null && <p className="error">{assign.error.message}</p>}
+      {assign.error !== null && <p className="error">{formatError(assign.error)}</p>}
     </div>
   )
 }

@@ -1,8 +1,9 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DocumentReviewDTO, DocumentSummaryDTO, MatterSummaryDTO } from '@aliasai/application'
 import { App } from './App'
+import { renderInEnglish } from './test-utils'
 
 const matterOne: MatterSummaryDTO = {
   id: 'matter-1',
@@ -43,7 +44,7 @@ describe('App workspace recovery', () => {
     localStorage.setItem('aliasai.lastDocumentId', 'document-1')
     installWorkspaceMock(invoke, [matterOne], { 'matter-1': [documentOne] })
 
-    render(<App />)
+    renderInEnglish(<App />)
 
     expect(await screen.findByRole('heading', { name: 'synthetic.pdf' })).toBeDefined()
     expect(invoke).toHaveBeenCalledWith('document:list', { matterId: 'matter-1' })
@@ -62,7 +63,7 @@ describe('App workspace recovery', () => {
     })
     const user = userEvent.setup()
 
-    render(<App />)
+    renderInEnglish(<App />)
     await user.click(await screen.findByRole('button', { name: 'Matter One' }))
     await user.click(await screen.findByRole('button', { name: /synthetic\.pdf/ }))
     expect(await screen.findByRole('heading', { name: 'synthetic.pdf' })).toBeDefined()
@@ -87,7 +88,7 @@ describe('App workspace recovery', () => {
     })
     const user = userEvent.setup()
 
-    render(<App />)
+    renderInEnglish(<App />)
     await user.type(screen.getByLabelText('New matter name'), 'New Matter')
     await user.click(screen.getByRole('button', { name: 'Create' }))
 

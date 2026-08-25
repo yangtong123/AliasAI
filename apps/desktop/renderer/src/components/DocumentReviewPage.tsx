@@ -1,6 +1,7 @@
 import type { DocumentReviewDTO, MentionReviewDTO } from '@aliasai/application'
 import { invoke } from '../api/client'
 import { useMutation } from '../api/hooks'
+import { useI18n } from '../i18n'
 import { BlockText } from './BlockText'
 import { CandidateList } from './CandidateList'
 import { EntityPanel } from './EntityPanel'
@@ -12,10 +13,11 @@ export function MentionDetail(props: {
   readonly mention: MentionReviewDTO | null
   readonly onChanged: () => void
 }) {
+  const { t, label, formatError } = useI18n()
   const confirm = useMutation((mentionId: string) => invoke('review:confirm', { mentionId }))
 
   if (props.mention === null) {
-    return <p className="empty">Select a highlighted mention to review it</p>
+    return <p className="empty">{t('mention.select')}</p>
   }
   const mention = props.mention
   // Review mutations desync a SANITIZED artifact; block them until re-import.
@@ -24,19 +26,26 @@ export function MentionDetail(props: {
   return (
     <section className="mention-detail">
       <h3>
-        {mention.text} <span className={`badge decision-${mention.decisionStatus.toLowerCase()}`}>{mention.decisionStatus}</span>
+        {mention.text}{' '}
+        <span className={`badge decision-${mention.decisionStatus.toLowerCase()}`}>{label(mention.decisionStatus)}</span>
       </h3>
       <p>
-        {mention.type} · {mention.strength} · confidence {mention.confidence.toFixed(2)} · page {mention.pageNo + 1}
-        {mention.margin !== null && <> · margin {mention.margin}</>} · review {mention.reviewStatus}
+        {t('mention.details', {
+          type: label(mention.type),
+          strength: label(mention.strength),
+          confidence: mention.confidence.toFixed(2),
+          page: mention.pageNo
+        })}
+        {mention.margin !== null && t('mention.margin', { margin: mention.margin })}
+        {t('mention.review', { status: label(mention.reviewStatus) })}
       </p>
       {mention.assignedEntity !== null && (
         <p>
-          Assigned to <strong>{mention.assignedEntity.primaryAlias ?? mention.assignedEntity.publicToken}</strong>
+          {t('mention.assigned')} <strong>{mention.assignedEntity.primaryAlias ?? mention.assignedEntity.publicToken}</strong>
         </p>
       )}
       {locked ? (
-        <p className="warning">Document is sanitized; re-import to change review decisions.</p>
+        <p className="warning">{t('mention.locked')}</p>
       ) : (
         <>
           <CandidateList mentionId={mention.mentionId} candidates={mention.candidates} onApplied={props.onChanged} />
@@ -57,10 +66,10 @@ export function MentionDetail(props: {
                 })
               }}
             >
-              {mention.reviewStatus === 'CONFIRMED' ? 'Confirmed' : 'Confirm'}
+              {t(mention.reviewStatus === 'CONFIRMED' ? 'mention.confirmed' : 'mention.confirm')}
             </button>
           )}
-          {confirm.error !== null && <p className="error">{confirm.error.message}</p>}
+          {confirm.error !== null && <p className="error">{formatError(confirm.error)}</p>}
         </>
       )}
     </section>
@@ -73,6 +82,7 @@ export function DocumentReviewPage(props: {
   readonly onSelectMention: (mentionId: string | null) => void
   readonly onChanged: () => void
 }) {
+  const { t } = useI18n()
   const allMentions = props.review.blocks.flatMap((block) => block.mentions)
   const selected = allMentions.find((mention) => mention.mentionId === props.selectedMentionId) ?? null
 
@@ -80,8 +90,12 @@ export function DocumentReviewPage(props: {
     <div className="review-layout">
       <div className="review-blocks">
         <p className="counts">
-          {props.review.counts.mentions} mentions · {props.review.counts.resolved} resolved ·{' '}
-          {props.review.counts.needsReview} need review · {props.review.counts.unresolved} unresolved
+          {t('mention.counts', {
+            mentions: props.review.counts.mentions,
+            resolved: props.review.counts.resolved,
+            needsReview: props.review.counts.needsReview,
+            unresolved: props.review.counts.unresolved
+          })}
         </p>
         {props.review.blocks.map((block) => (
           <BlockText

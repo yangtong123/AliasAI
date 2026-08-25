@@ -1,12 +1,13 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BlockReviewDTO } from '@aliasai/application'
+import { renderInEnglish } from '../test-utils'
 import { BlockText } from './BlockText'
 
 const block = (text: string, mentions: BlockReviewDTO['mentions']): BlockReviewDTO => ({
   blockId: 'block-1',
-  pageNo: 0,
+  pageNo: 1,
   readingOrder: 0,
   text,
   mentions
@@ -19,7 +20,7 @@ afterEach(() => {
 
 describe('BlockText', () => {
   it('renders mention spans between plain text slices', () => {
-    render(
+    renderInEnglish(
       <BlockText
         block={block('Reach Holder via phone.', [
           {
@@ -32,7 +33,7 @@ describe('BlockText', () => {
             startOffset: 6,
             endOffset: 12,
             blockId: 'block-1',
-            pageNo: 0,
+            pageNo: 1,
             confidence: 0.9,
             detector: 'NER',
             reviewStatus: 'UNREVIEWED',
@@ -49,6 +50,7 @@ describe('BlockText', () => {
 
     const mentionButton = screen.getByRole('button', { name: 'Holder' })
     expect(mentionButton.className).toContain('decision-needs_review')
+    expect(screen.getByText('Page 1 · Block 1')).toBeDefined()
     expect(screen.getByText('Reach')).toBeDefined()
     expect(screen.getByText('via phone.', { exact: false })).toBeDefined()
   })
@@ -56,7 +58,7 @@ describe('BlockText', () => {
   it('selects a mention on click', async () => {
     const onSelect = vi.fn()
     const user = userEvent.setup()
-    render(
+    renderInEnglish(
       <BlockText
         block={block('Holder', [
           {
@@ -69,7 +71,7 @@ describe('BlockText', () => {
             startOffset: 0,
             endOffset: 6,
             blockId: 'block-1',
-            pageNo: 0,
+            pageNo: 1,
             confidence: 0.9,
             detector: 'NER',
             reviewStatus: 'UNREVIEWED',

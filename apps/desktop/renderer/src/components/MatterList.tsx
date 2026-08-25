@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { MatterSummaryDTO } from '@aliasai/application'
 import { invoke } from '../api/client'
 import { useMutation } from '../api/hooks'
+import { useI18n } from '../i18n'
 
 export function MatterList(props: {
   readonly matters: readonly MatterSummaryDTO[]
@@ -9,12 +10,13 @@ export function MatterList(props: {
   readonly onSelect: (matterId: string) => void
   readonly onCreated: (matterId: string) => void
 }) {
+  const { t, formatError } = useI18n()
   const [name, setName] = useState('')
   const create = useMutation((value: string) => invoke('matter:create', { name: value }))
 
   return (
     <section className="matter-list">
-      <h2>Matters</h2>
+      <h2>{t('matters.title')}</h2>
       <ul>
         {props.matters.map((matter) => (
           <li key={matter.id}>
@@ -27,7 +29,7 @@ export function MatterList(props: {
             </button>
           </li>
         ))}
-        {props.matters.length === 0 && <li className="empty">No matters yet</li>}
+        {props.matters.length === 0 && <li className="empty">{t('matters.empty')}</li>}
       </ul>
       <form
         onSubmit={(event) => {
@@ -43,15 +45,15 @@ export function MatterList(props: {
       >
         <input
           value={name}
-          placeholder="New matter name"
+          placeholder={t('matters.namePlaceholder')}
           onChange={(event) => setName(event.target.value)}
-          aria-label="New matter name"
+          aria-label={t('matters.namePlaceholder')}
         />
         <button type="submit" disabled={create.pending || name.trim().length === 0}>
-          Create
+          {t('matters.create')}
         </button>
       </form>
-      {create.error !== null && <p className="error">{create.error.message}</p>}
+      {create.error !== null && <p className="error">{formatError(create.error)}</p>}
     </section>
   )
 }

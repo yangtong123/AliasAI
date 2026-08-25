@@ -84,6 +84,13 @@ Layering and boundary rules:
   transaction (assign/reassign/confirm/create-and-assign all reject mentions
   whose Document is SANITIZING or SANITIZED), so a direct IPC call cannot
   desynchronize the review state from the persisted artifact.
+  User-visible copy is provided by a renderer-only, dependency-free i18n
+  context. Simplified Chinese is the default locale, English is available from
+  the header, and the selected locale is persisted in renderer `localStorage`.
+  Domain/status codes remain stable across IPC and persistence; the renderer
+  maps them to localized labels and maps known error codes to Chinese messages.
+  Changing locale never reruns application services or changes persisted
+  document data.
 - **AI boundary**: the renderer sends only a `sanitizedDocumentId`; the main
   process reloads the immutable artifact from SQLite. The `AiProvider` receives
   exactly `{ content }`, never a Matter/Document/Entity/Mention ID, key, mapping,

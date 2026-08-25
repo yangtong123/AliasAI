@@ -1,7 +1,8 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CandidateDTO } from '@aliasai/application'
+import { renderInEnglish } from '../test-utils'
 import { CandidateList } from './CandidateList'
 
 const candidate = (overrides: Partial<CandidateDTO> = {}): CandidateDTO => ({
@@ -35,7 +36,7 @@ describe('CandidateList', () => {
   })
 
   it('shows the empty-state hint without candidates', () => {
-    render(<CandidateList mentionId="mention-1" candidates={[]} onApplied={() => {}} />)
+    renderInEnglish(<CandidateList mentionId="mention-1" candidates={[]} onApplied={() => {}} />)
 
     expect(screen.getByText(/No candidates/i)).toBeDefined()
   })
@@ -45,10 +46,10 @@ describe('CandidateList', () => {
     invoke.mockResolvedValueOnce({ ok: true, data: {} })
     const user = userEvent.setup()
 
-    render(<CandidateList mentionId="mention-1" candidates={[candidate()]} onApplied={onApplied} />)
+    renderInEnglish(<CandidateList mentionId="mention-1" candidates={[candidate()]} onApplied={onApplied} />)
 
     expect(screen.getByText(/score 90/)).toBeDefined()
-    expect(screen.getByText(/SHARED_PROTECTED_VALUE \(weight 40, score 40\)/)).toBeDefined()
+    expect(screen.getByText(/Shared protected value \(weight 40, score 40\)/)).toBeDefined()
     await user.click(screen.getByRole('button', { name: 'Accept' }))
 
     expect(invoke).toHaveBeenCalledWith('review:assign', { mentionId: 'mention-1', entityId: 'entity-1' })
@@ -56,7 +57,7 @@ describe('CandidateList', () => {
   })
 
   it('offers no accept button for resolved candidates', () => {
-    render(<CandidateList mentionId="mention-1" candidates={[candidate({ state: 'REJECTED' })]} onApplied={() => {}} />)
+    renderInEnglish(<CandidateList mentionId="mention-1" candidates={[candidate({ state: 'REJECTED' })]} onApplied={() => {}} />)
 
     expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull()
   })

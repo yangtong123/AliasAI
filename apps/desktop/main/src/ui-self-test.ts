@@ -129,60 +129,72 @@ const UI_DRIVER = String.raw`
   const bridgeProbe = await window.aliasAi.invoke('matter:list', {});
   if (!bridgeProbe.ok) throw new Error('ui self-test bridge probe failed: ' + bridgeProbe.error.code);
 
-  await setInput('New matter name', 'AliasAI UI Self-Test Matter');
-  await click('Create');
+  const locale = await waitFor(() => document.querySelector('[aria-label="界面语言"]'), 'locale switcher');
+  if (locale.value !== 'zh-CN' || document.documentElement.lang !== 'zh-CN') {
+    throw new Error('ui self-test failed: Simplified Chinese was not the default locale');
+  }
+  locale.value = 'en';
+  locale.dispatchEvent(new Event('change', { bubbles: true }));
+  await waitFor(() => buttons().find((candidate) => candidate.textContent.trim() === 'Create'), 'English locale');
+  locale.value = 'zh-CN';
+  locale.dispatchEvent(new Event('change', { bubbles: true }));
+  await waitFor(() => buttons().find((candidate) => candidate.textContent.trim() === '创建'), 'Chinese locale');
+  stage('locale-switched');
+
+  await setInput('新事项名称', 'AliasAI UI Self-Test Matter');
+  await click('创建');
   await click('AliasAI UI Self-Test Matter');
   stage('matter-created');
 
-  await click('Import PDF…');
-  await click('synthetic-ui.pdf IMPORTED');
+  await click('导入 PDF…');
+  await click('synthetic-ui.pdf 已导入');
   stage('document-imported');
 
-  await click('Run Parse');
-  await click('Run Detect');
-  await click('Run Resolve');
-  await waitFor(() => document.querySelector('[title^="ID_CARD"]'), 'ID_CARD mention');
+  await click('运行解析');
+  await click('运行隐私检测');
+  await click('运行实体解析');
+  await waitFor(() => document.querySelector('[title^="身份证号"]'), 'ID_CARD mention');
   stage('pipeline-ready');
 
-  document.querySelector('[title^="ID_CARD"]').click();
-  await setInput('New entity primary alias', 'Holder One');
-  await click('Create entity & assign');
+  document.querySelector('[title^="身份证号"]').click();
+  await setInput('新实体的主要别名', 'Holder One');
+  await click('创建实体并分配');
   await waitFor(() => document.querySelector('.mention-detail strong')?.textContent === 'Holder One', 'ID assignment');
-  await click('Confirm');
-  await waitFor(() => button('Confirmed') || buttons().find((candidate) => candidate.textContent.trim() === 'Confirmed'), 'ID confirmation');
+  await click('确认');
+  await waitFor(() => button('已确认') || buttons().find((candidate) => candidate.textContent.trim() === '已确认'), 'ID confirmation');
 
-  document.querySelector('[title^="EMAIL"]').click();
+  document.querySelector('[title^="电子邮箱"]').click();
   const picker = await waitFor(() => document.querySelector('.entity-picker select'), 'entity picker');
   const option = Array.from(picker.options).find((candidate) => candidate.textContent.includes('Holder One'));
   if (!option) throw new Error('ui self-test failed: Holder One was absent from entity picker');
   picker.value = option.value;
   picker.dispatchEvent(new Event('change', { bubbles: true }));
   await waitFor(() => document.querySelector('.mention-detail strong')?.textContent === 'Holder One', 'email assignment');
-  await click('Confirm');
-  await waitFor(() => button('Confirmed') || buttons().find((candidate) => candidate.textContent.trim() === 'Confirmed'), 'email confirmation');
-  await waitFor(() => document.querySelector('.counts')?.textContent.includes('2 resolved'), 'both assignments');
+  await click('确认');
+  await waitFor(() => button('已确认') || buttons().find((candidate) => candidate.textContent.trim() === '已确认'), 'email confirmation');
+  await waitFor(() => document.querySelector('.counts')?.textContent.includes('已解析 2 处'), 'both assignments');
   stage('review-completed');
 
-  await click('Sanitized preview');
-  await click('Generate sanitized preview');
-  await waitFor(() => Array.from(document.querySelectorAll('h3')).some((node) => node.textContent === 'Sanitized preview'), 'sanitized preview');
+  await click('脱敏预览');
+  await click('生成脱敏预览');
+  await waitFor(() => Array.from(document.querySelectorAll('h3')).some((node) => node.textContent === '脱敏预览'), 'sanitized preview');
   const sanitized = Array.from(document.querySelectorAll('.sanitized-block')).map((node) => node.textContent).join('\n');
   if (sanitized.includes('110101199003077774') || sanitized.includes('synthetic@example.test')) {
     throw new Error('ui self-test failed: sanitized preview leaked plaintext');
   }
-  await click('Copy sanitized document');
-  await waitFor(() => document.body.textContent.includes('Sanitized document copied.'), 'sanitized copy');
-  await click('Export sanitized document…');
-  await waitFor(() => document.body.textContent.includes('Sanitized document saved.'), 'sanitized export');
+  await click('复制脱敏文档');
+  await waitFor(() => document.body.textContent.includes('已复制脱敏文档。'), 'sanitized copy');
+  await click('导出脱敏文档…');
+  await waitFor(() => document.body.textContent.includes('已保存脱敏文档。'), 'sanitized export');
   stage('sanitized-and-exported');
 
   const restoreLabel = Array.from(document.querySelectorAll('label')).find(
-    (candidate) => candidate.textContent.trim() === 'Restore RESTORE_ON_REQUEST values locally'
+    (candidate) => candidate.textContent.trim() === '在本地还原“按需还原”的值'
   );
   if (!restoreLabel) throw new Error('ui self-test failed: restore policy control missing');
   restoreLabel.querySelector('input').click();
-  await click('Send sanitized document');
-  await waitFor(() => Array.from(document.querySelectorAll('h4')).some((node) => node.textContent === 'Sanitized AI response'), 'AI response');
+  await click('发送脱敏文档');
+  await waitFor(() => Array.from(document.querySelectorAll('h4')).some((node) => node.textContent === '脱敏后的 AI 回复'), 'AI response');
   const responses = Array.from(document.querySelectorAll('.ai-results pre')).map((node) => node.textContent);
   if (responses.length !== 2) throw new Error('ui self-test failed: AI results incomplete');
   if (responses[0].includes('110101199003077774') || responses[0].includes('synthetic@example.test')) {
@@ -191,14 +203,14 @@ const UI_DRIVER = String.raw`
   if (!responses[1].includes('110101199003077774') || !responses[1].includes('synthetic@example.test')) {
     throw new Error('ui self-test failed: local rehydration omitted plaintext');
   }
-  await click('Copy sanitized response');
-  await waitFor(() => document.body.textContent.includes('Sanitized response copied.'), 'sanitized response copy');
-  await click('Export sanitized response…');
-  await waitFor(() => document.body.textContent.includes('Sanitized response saved.'), 'sanitized response export');
-  await click('Copy restored response');
-  await waitFor(() => document.body.textContent.includes('Restored response copied.'), 'restored response copy');
-  await click('Export restored response…');
-  await waitFor(() => document.body.textContent.includes('Restored response saved.'), 'restored response export');
+  await click('复制脱敏回复');
+  await waitFor(() => document.body.textContent.includes('已复制脱敏回复。'), 'sanitized response copy');
+  await click('导出脱敏回复…');
+  await waitFor(() => document.body.textContent.includes('已保存脱敏回复。'), 'sanitized response export');
+  await click('复制还原回复');
+  await waitFor(() => document.body.textContent.includes('已复制还原回复。'), 'restored response copy');
+  await click('导出还原回复…');
+  await waitFor(() => document.body.textContent.includes('已保存还原回复。'), 'restored response export');
   stage('ai-rehydrated-and-exported');
 
   return { stages };

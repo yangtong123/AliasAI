@@ -1,6 +1,7 @@
 import type { DocumentSummaryDTO } from '@aliasai/application'
 import { invoke } from '../api/client'
 import { useMutation } from '../api/hooks'
+import { useI18n } from '../i18n'
 import { StatusBadge } from './StatusBadge'
 
 export function DocumentList(props: {
@@ -10,6 +11,7 @@ export function DocumentList(props: {
   readonly onSelect: (documentId: string) => void
   readonly onChanged: () => void
 }) {
+  const { t, formatError } = useI18n()
   const importDocument = useMutation(() =>
     invoke('document:pickAndImport', { matterId: props.matterId ?? '' })
   )
@@ -23,9 +25,9 @@ export function DocumentList(props: {
 
   return (
     <section className="document-list">
-      <h2>Documents</h2>
+      <h2>{t('documents.title')}</h2>
       {props.matterId === null ? (
-        <p className="empty">Select a matter first</p>
+        <p className="empty">{t('documents.selectMatter')}</p>
       ) : (
         <>
           <ul>
@@ -40,12 +42,12 @@ export function DocumentList(props: {
                 </button>
               </li>
             ))}
-            {props.documents.length === 0 && <li className="empty">No documents yet</li>}
+            {props.documents.length === 0 && <li className="empty">{t('documents.empty')}</li>}
           </ul>
           <button type="button" onClick={onImportClick} disabled={importDocument.pending}>
-            Import PDF…
+            {t('documents.import')}
           </button>
-          {importDocument.error !== null && <p className="error">{importDocument.error.message}</p>}
+          {importDocument.error !== null && <p className="error">{formatError(importDocument.error)}</p>}
         </>
       )}
     </section>

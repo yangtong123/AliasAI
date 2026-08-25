@@ -1,6 +1,7 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { renderInEnglish } from '../test-utils'
 import { PipelineControls } from './PipelineControls'
 
 describe('PipelineControls', () => {
@@ -17,7 +18,7 @@ describe('PipelineControls', () => {
   })
 
   it('gates the next stage button by parse status', () => {
-    const { rerender } = render(
+    const { rerender } = renderInEnglish(
       <PipelineControls documentId="document-1" parseStatus="PARSED" jobs={[]} onChanged={() => {}} />
     )
     expect(screen.getByRole('button', { name: 'Run Detect' })).toBeDefined()
@@ -34,7 +35,7 @@ describe('PipelineControls', () => {
     ['DETECT', 'Retry Detect'],
     ['RESOLVE', 'Retry Resolve']
   ] as const)('retries the failed downstream %s stage instead of incorrectly reparsing', (type, label) => {
-    render(
+    renderInEnglish(
       <PipelineControls
         documentId="document-1"
         parseStatus="FAILED"
@@ -48,7 +49,7 @@ describe('PipelineControls', () => {
   })
 
   it('leaves a failed sanitization retry to the preview workflow', () => {
-    render(
+    renderInEnglish(
       <PipelineControls
         documentId="document-1"
         parseStatus="FAILED"
@@ -62,7 +63,7 @@ describe('PipelineControls', () => {
   })
 
   it('retries parsing when FAILED has no downstream job', () => {
-    render(<PipelineControls documentId="document-1" parseStatus="FAILED" jobs={[]} onChanged={() => {}} />)
+    renderInEnglish(<PipelineControls documentId="document-1" parseStatus="FAILED" jobs={[]} onChanged={() => {}} />)
 
     expect(screen.getByRole('button', { name: 'Retry Parse' })).toBeDefined()
   })
@@ -72,7 +73,7 @@ describe('PipelineControls', () => {
     const onChanged = vi.fn()
     const user = userEvent.setup()
 
-    render(
+    renderInEnglish(
       <PipelineControls
         documentId="document-1"
         parseStatus="DETECTED"
@@ -81,7 +82,7 @@ describe('PipelineControls', () => {
       />
     )
 
-    expect(screen.getByText(/RESOLVE: 50%/)).toBeDefined()
+    expect(screen.getByText(/Resolve: 50%/)).toBeDefined()
     await user.click(screen.getByRole('button', { name: 'Run Resolve' }))
     expect(invoke).toHaveBeenCalledWith('document:resolve', { documentId: 'document-1' })
     expect(onChanged).toHaveBeenCalled()

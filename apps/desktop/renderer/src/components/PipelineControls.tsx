@@ -2,18 +2,19 @@ import type { DocumentParseStatus } from '@aliasai/domain'
 import type { JobSummaryDTO } from '@aliasai/application'
 import { invoke } from '../api/client'
 import { useMutation } from '../api/hooks'
+import { useI18n } from '../i18n'
 
 type Stage = {
-  readonly label: string
+  readonly key: 'pipeline.parse' | 'pipeline.detect' | 'pipeline.resolve'
   readonly channel: 'document:process' | 'document:detect' | 'document:resolve'
   /** Statuses from which this stage can run. */
   readonly enabledFrom: readonly DocumentParseStatus[]
 }
 
 const STAGES: readonly Stage[] = [
-  { label: 'Parse', channel: 'document:process', enabledFrom: ['IMPORTED'] },
-  { label: 'Detect', channel: 'document:detect', enabledFrom: ['PARSED'] },
-  { label: 'Resolve', channel: 'document:resolve', enabledFrom: ['DETECTED'] }
+  { key: 'pipeline.parse', channel: 'document:process', enabledFrom: ['IMPORTED'] },
+  { key: 'pipeline.detect', channel: 'document:detect', enabledFrom: ['PARSED'] },
+  { key: 'pipeline.resolve', channel: 'document:resolve', enabledFrom: ['DETECTED'] }
 ]
 
 export function PipelineControls(props: {
@@ -22,6 +23,7 @@ export function PipelineControls(props: {
   readonly jobs: readonly JobSummaryDTO[]
   readonly onChanged: () => void
 }) {
+  const { t, label, formatError } = useI18n()
   const current = selectStage(props.parseStatus, props.jobs)
   const run = useMutation((channel: Stage['channel']) => invoke(channel, { documentId: props.documentId }))
 
@@ -38,22 +40,22 @@ export function PipelineControls(props: {
     <section className="pipeline">
       <ol className="stages">
         {STAGES.map((stage) => (
-          <li key={stage.channel}>{stage.label}</li>
+          <li key={stage.channel}>{t(stage.key)}</li>
         ))}
       </ol>
       {current !== undefined ? (
         <button type="button" onClick={onRun} disabled={run.pending}>
-          {props.parseStatus === 'FAILED' ? 'Retry' : 'Run'} {current.label}
+          {t(props.parseStatus === 'FAILED' ? 'pipeline.retry' : 'pipeline.run', { stage: t(current.key) })}
         </button>
       ) : (
-        <p className="empty">Pipeline idle</p>
+        <p className="empty">{t('pipeline.idle')}</p>
       )}
       {activeJob !== undefined && (
         <p>
-          {activeJob.type}: {Math.round(activeJob.progress * 100)}%
+          {t('pipeline.progress', { stage: label(activeJob.type), percent: Math.round(activeJob.progress * 100) })}
         </p>
       )}
-      {run.error !== null && <p className="error">{run.error.message}</p>}
+      {run.error !== null && <p className="error">{formatError(run.error)}</p>}
     </section>
   )
 }

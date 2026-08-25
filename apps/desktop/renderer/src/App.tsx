@@ -5,12 +5,14 @@ import { DocumentReviewPage } from './components/DocumentReviewPage'
 import { MatterList } from './components/MatterList'
 import { PipelineControls } from './components/PipelineControls'
 import { SanitizedPreviewView } from './components/SanitizedPreview'
+import { useI18n } from './i18n'
 
 type View = 'review' | 'preview'
 const LAST_MATTER_KEY = 'aliasai.lastMatterId'
 const LAST_DOCUMENT_KEY = 'aliasai.lastDocumentId'
 
 export function App() {
+  const { locale, setLocale, t, formatError } = useI18n()
   const [refreshKey, setRefreshKey] = useState(0)
   const { matters, loaded: mattersLoaded, error: matterError } = useMatters(refreshKey)
   const [matterId, setMatterId] = useState<string | null>(() => localStorage.getItem(LAST_MATTER_KEY))
@@ -72,8 +74,19 @@ export function App() {
 
   return (
     <main>
-      <p className="eyebrow">Local-first privacy workspace</p>
-      <h1>AliasAI</h1>
+      <header className="app-header">
+        <div>
+          <p className="eyebrow">{t('app.tagline')}</p>
+          <h1>AliasAI</h1>
+        </div>
+        <label className="locale-switcher">
+          {t('language.label')}
+          <select value={locale} aria-label={t('language.label')} onChange={(event) => setLocale(event.target.value as typeof locale)}>
+            <option value="zh-CN">{t('language.chinese')}</option>
+            <option value="en">{t('language.english')}</option>
+          </select>
+        </label>
+      </header>
       <div className="layout">
         <aside>
           <MatterList
@@ -92,7 +105,7 @@ export function App() {
         </aside>
         <section className="content">
           {(matterError ?? documentListError) !== null && (
-            <p className="error">{(matterError ?? documentListError)!.message}</p>
+            <p className="error">{formatError((matterError ?? documentListError)!)}</p>
           )}
           {status.document !== null ? (
             <>
@@ -100,10 +113,10 @@ export function App() {
                 <h2>{status.document.originalName}</h2>
                 <nav>
                   <button type="button" className={view === 'review' ? 'selected' : undefined} onClick={() => setView('review')}>
-                    Review
+                    {t('nav.review')}
                   </button>
                   <button type="button" className={view === 'preview' ? 'selected' : undefined} onClick={() => setView('preview')}>
-                    Sanitized preview
+                    {t('nav.preview')}
                   </button>
                 </nav>
               </header>
@@ -122,7 +135,7 @@ export function App() {
                     onChanged={refresh}
                   />
                 ) : (
-                  <p className="empty">No review data</p>
+                  <p className="empty">{t('workspace.noReview')}</p>
                 )
               ) : (
                 <SanitizedPreviewView
@@ -137,11 +150,11 @@ export function App() {
                 />
               )}
               {(review.error ?? preview.error) !== null && (
-                <p className="error">{(review.error ?? preview.error)!.message}</p>
+                <p className="error">{formatError((review.error ?? preview.error)!)}</p>
               )}
             </>
           ) : (
-            <p className="empty">Select a matter and document</p>
+            <p className="empty">{t('workspace.select')}</p>
           )}
         </section>
       </div>

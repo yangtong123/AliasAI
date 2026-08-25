@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { SanitizedPreview } from '@aliasai/application'
 import { invoke } from '../api/client'
 import { useMutation } from '../api/hooks'
+import { useI18n } from '../i18n'
 import { AiExecutionPanel } from './AiExecutionPanel'
 
 export function SanitizedPreviewView(props: {
@@ -10,6 +11,7 @@ export function SanitizedPreviewView(props: {
   readonly onGenerated: () => void
   readonly onReviewMention?: (mentionId: string) => void
 }) {
+  const { t, label, formatError } = useI18n()
   const [includeOnRequest, setIncludeOnRequest] = useState(true)
   const [demoText, setDemoText] = useState('')
   const [demoResult, setDemoResult] = useState<{ text: string; unresolvedTokens: readonly string[] } | null>(null)
@@ -27,20 +29,20 @@ export function SanitizedPreviewView(props: {
   const exportSanitized = useMutation((documentId: string, sanitizedDocumentId: string) =>
     invoke('preview:exportSanitized', { documentId, sanitizedDocumentId })
   )
-  const [artifactStatus, setArtifactStatus] = useState<string | null>(null)
+  const [artifactStatus, setArtifactStatus] = useState<'preview.copied' | 'preview.saved' | null>(null)
 
   if (props.preview === null) {
-    return <p className="empty">No preview yet</p>
+    return <p className="empty">{t('preview.empty')}</p>
   }
   if (props.preview.status === 'NOT_READY') {
-    return <p className="empty">Run the pipeline to READY before generating a preview ({props.preview.parseStatus}).</p>
+    return <p className="empty">{t('preview.notReady', { status: label(props.preview.parseStatus) })}</p>
   }
   if (props.preview.status === 'READY') {
     if (props.preview.blockers.length === 0) {
       return (
         <section className="preview">
-          <h3>Ready to sanitize</h3>
-          <p>All detected mentions have assignments and restoration tokens.</p>
+          <h3>{t('preview.readyTitle')}</h3>
+          <p>{t('preview.readyDescription')}</p>
           <button
             type="button"
             disabled={generate.pending}
@@ -50,28 +52,28 @@ export function SanitizedPreviewView(props: {
               })
             }}
           >
-            {generate.pending ? 'Generating…' : 'Generate sanitized preview'}
+            {t(generate.pending ? 'preview.generating' : 'preview.generate')}
           </button>
-          {generate.error !== null && <p className="error">{generate.error.message}</p>}
+          {generate.error !== null && <p className="error">{formatError(generate.error)}</p>}
         </section>
       )
     }
     return (
       <section className="preview">
-        <h3>Preview blocked</h3>
+        <h3>{t('preview.blocked')}</h3>
         <ul>
           {props.preview.blockers.map((blocker) => (
             <li key={blocker.mentionId}>
-              {blocker.mentionId}: {blocker.reason}{' '}
+              {blocker.mentionId}: {label(blocker.reason)}{' '}
               {props.onReviewMention !== undefined && (
                 <button type="button" onClick={() => props.onReviewMention?.(blocker.mentionId)}>
-                  Review mention
+                  {t('preview.reviewMention')}
                 </button>
               )}
             </li>
           ))}
         </ul>
-        <p>Resolve every mention in review, then generate again.</p>
+        <p>{t('preview.resolveAll')}</p>
       </section>
     )
   }
@@ -81,7 +83,7 @@ export function SanitizedPreviewView(props: {
 
   return (
     <section className="preview">
-      <h3>Sanitized preview</h3>
+      <h3>{t('preview.title')}</h3>
       {preview.blocks.map((block) => (
         <p key={block.blockId} className="sanitized-block">
           {block.text}
@@ -93,41 +95,39 @@ export function SanitizedPreviewView(props: {
           disabled={copySanitized.pending || exportSanitized.pending}
           onClick={() => {
             void copySanitized.run(props.documentId, preview.sanitizedDocumentId).then((result) => {
-              if (result !== null) setArtifactStatus('Sanitized document copied.')
+              if (result !== null) setArtifactStatus('preview.copied')
             })
           }}
         >
-          Copy sanitized document
+          {t('preview.copy')}
         </button>
         <button
           type="button"
           disabled={copySanitized.pending || exportSanitized.pending}
           onClick={() => {
             void exportSanitized.run(props.documentId, preview.sanitizedDocumentId).then((result) => {
-              if (result?.saved === true) setArtifactStatus('Sanitized document saved.')
+              if (result?.saved === true) setArtifactStatus('preview.saved')
             })
           }}
         >
-          Export sanitized document…
+          {t('preview.export')}
         </button>
       </div>
       {(copySanitized.error ?? exportSanitized.error) !== null && (
-        <p className="error">{(copySanitized.error ?? exportSanitized.error)!.message}</p>
+        <p className="error">{formatError((copySanitized.error ?? exportSanitized.error)!)}</p>
       )}
-      {artifactStatus !== null && <p role="status">{artifactStatus}</p>}
+      {artifactStatus !== null && <p role="status">{t(artifactStatus)}</p>}
 
       {/* Remounting per document keeps AI execution state (results, pending,
           errors) from ever bleeding across documents. */}
       <AiExecutionPanel key={preview.sanitizedDocumentId} sanitizedDocumentId={preview.sanitizedDocumentId} />
 
-      <h4>Local rehydration demo</h4>
-      <p className="hint">
-        Paste or edit the sanitized text as a simulated AI reply; tokens are restored locally only.
-      </p>
+      <h4>{t('preview.demoTitle')}</h4>
+      <p className="hint">{t('preview.demoHint')}</p>
       <textarea
         value={demoText}
         rows={4}
-        aria-label="Simulated AI reply"
+        aria-label={t('preview.demoAria')}
         placeholder={sanitizedJoin}
         onChange={(event) => setDemoText(event.target.value)}
       />
@@ -137,7 +137,7 @@ export function SanitizedPreviewView(props: {
           checked={includeOnRequest}
           onChange={(event) => setIncludeOnRequest(event.target.checked)}
         />
-        Restore RESTORE_ON_REQUEST values
+        {t('preview.restoreOnRequest')}
       </label>
       <button
         type="button"
@@ -148,19 +148,19 @@ export function SanitizedPreviewView(props: {
           })
         }}
       >
-        Rehydrate locally
+        {t('preview.rehydrate')}
       </button>
       <button type="button" onClick={() => setDemoText(sanitizedJoin)}>
-        Use sanitized text
+        {t('preview.useSanitized')}
       </button>
-      {rehydrate.error !== null && <p className="error">{rehydrate.error.message}</p>}
+      {rehydrate.error !== null && <p className="error">{formatError(rehydrate.error)}</p>}
 
       {demoResult !== null && (
         <div className="demo-result">
           <p>{demoResult.text}</p>
           {demoResult.unresolvedTokens.length > 0 && (
             <p className="warning">
-              Unresolved tokens for manual review: {demoResult.unresolvedTokens.join(', ')}
+              {t('preview.unresolved', { tokens: demoResult.unresolvedTokens.join(', ') })}
             </p>
           )}
         </div>
@@ -171,9 +171,9 @@ export function SanitizedPreviewView(props: {
           if (result !== null) props.onGenerated()
         })
       }}>
-        Regenerate
+        {t('preview.regenerate')}
       </button>
-      {generate.error !== null && <p className="error">{generate.error.message}</p>}
+      {generate.error !== null && <p className="error">{formatError(generate.error)}</p>}
     </section>
   )
 }

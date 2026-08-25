@@ -40,6 +40,11 @@ Use synthetic or disposable documents only during RC testing.
 8. Quit and reopen. The last valid Matter and Document selection should be
    restored; persisted results remain available.
 
+The desktop UI defaults to Simplified Chinese. Use the language selector in
+the upper-right corner to switch between 简体中文 and English; the choice must
+survive an application restart. The packaged UI self-test switches both ways,
+then completes the entire acceptance workflow through the Chinese interface.
+
 ## Failure and restart checks
 
 - A failed Parse, Detect, or Resolve stage shows the matching Retry action.

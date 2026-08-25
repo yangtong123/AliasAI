@@ -1,5 +1,7 @@
 import type { DocumentParseStatus } from '@aliasai/domain'
+import { useI18n } from '../i18n'
 
 export function StatusBadge(props: { readonly status: DocumentParseStatus }) {
-  return <span className={`badge status-${props.status.toLowerCase()}`}>{props.status}</span>
+  const { label } = useI18n()
+  return <span className={`badge status-${props.status.toLowerCase()}`}>{label(props.status)}</span>
 }

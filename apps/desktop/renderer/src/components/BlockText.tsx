@@ -1,5 +1,6 @@
 import type { JSX } from 'react'
 import type { BlockReviewDTO, MentionReviewDTO } from '@aliasai/application'
+import { useI18n } from '../i18n'
 
 /**
  * Renders block text with its mention spans highlighted. Mentions arrive in
@@ -11,6 +12,7 @@ export function BlockText(props: {
   readonly selectedMentionId: string | null
   readonly onSelectMention: (mentionId: string) => void
 }) {
+  const { t, label } = useI18n()
   const nodes: JSX.Element[] = []
   let cursor = 0
   props.block.mentions.forEach((mention, index) => {
@@ -25,7 +27,7 @@ export function BlockText(props: {
           mention.mentionId === props.selectedMentionId ? ' selected' : ''
         }`}
         onClick={() => props.onSelectMention(mention.mentionId)}
-        title={`${mention.type} · ${mention.decisionStatus}`}
+        title={`${label(mention.type)} · ${label(mention.decisionStatus)}`}
       >
         {props.block.text.slice(mention.startOffset, mention.endOffset)}
       </button>
@@ -39,7 +41,7 @@ export function BlockText(props: {
   return (
     <article className="block">
       <header>
-        Page {props.block.pageNo} · Block {props.block.readingOrder + 1}
+        {t('block.position', { page: props.block.pageNo, block: props.block.readingOrder + 1 })}
       </header>
       <p className="block-text">{nodes}</p>
     </article>

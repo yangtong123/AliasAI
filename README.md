@@ -1,6 +1,6 @@
 # AliasAI
 
-Local-first, privacy-preserving AI workspace. V1 RC1 runs locally from PDF parsing and privacy detection through entity review, immutable sanitization, privacy-checked Mock AI execution, encrypted response persistence, local rehydration, and explicit copy/export.
+Local-first, privacy-preserving AI workspace. V1 RC1 provides a Simplified-Chinese-first desktop UI with persistent Chinese/English switching, and runs locally from PDF parsing and privacy detection through entity review, immutable sanitization, privacy-checked Mock AI execution, encrypted response persistence, local rehydration, and explicit copy/export.
 
 ## Development
 

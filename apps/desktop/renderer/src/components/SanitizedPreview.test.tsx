@@ -1,8 +1,25 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SanitizedPreview } from '@aliasai/application'
+import { I18nProvider, useI18n } from '../i18n'
+import { renderInEnglish } from '../test-utils'
 import { SanitizedPreviewView } from './SanitizedPreview'
+
+function LanguageToggle() {
+  const { setLocale } = useI18n()
+  return <button onClick={() => setLocale('zh-CN')}>Switch to Chinese</button>
+}
+
+function renderWithLanguageToggle(ui: ReactElement) {
+  return render(
+    <I18nProvider initialLocale="en">
+      <LanguageToggle />
+      {ui}
+    </I18nProvider>
+  )
+}
 
 describe('SanitizedPreviewView', () => {
   const invoke = vi.fn()
@@ -24,7 +41,7 @@ describe('SanitizedPreviewView', () => {
     }
 
     const onReviewMention = vi.fn()
-    render(
+    renderInEnglish(
       <SanitizedPreviewView
         documentId="document-1"
         preview={preview}
@@ -34,7 +51,7 @@ describe('SanitizedPreviewView', () => {
     )
 
     expect(screen.getByText(/Preview blocked/)).toBeDefined()
-    expect(screen.getByText(/mention-1: UNRESOLVED/)).toBeDefined()
+    expect(screen.getByText(/mention-1: Unresolved/)).toBeDefined()
     screen.getByRole('button', { name: 'Review mention' }).click()
     expect(onReviewMention).toHaveBeenCalledWith('mention-1')
   })
@@ -45,7 +62,7 @@ describe('SanitizedPreviewView', () => {
     const onGenerated = vi.fn()
     const user = userEvent.setup()
 
-    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={onGenerated} />)
+    renderInEnglish(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={onGenerated} />)
     await user.click(screen.getByRole('button', { name: 'Generate sanitized preview' }))
 
     expect(invoke).toHaveBeenCalledWith('preview:generate', { documentId: 'document-1' })
@@ -64,7 +81,7 @@ describe('SanitizedPreviewView', () => {
       .mockResolvedValueOnce({ ok: true, data: { text: '当事人:110101199003077774。', unresolvedTokens: [] } })
     const user = userEvent.setup()
 
-    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    renderInEnglish(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
 
     expect(screen.getByText(/当事人:Holder One〔@I-933F7561C93A4DB8〕。/)).toBeDefined()
     await user.type(screen.getByLabelText('Simulated AI reply'), '当事人:Holder One〔@I-933F7561C93A4DB8〕。')
@@ -90,7 +107,7 @@ describe('SanitizedPreviewView', () => {
       .mockResolvedValueOnce({ ok: true, data: { text: '参见〔@I-0000000000000000〕', unresolvedTokens: ['@I-0000000000000000'] } })
     const user = userEvent.setup()
 
-    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    renderInEnglish(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
 
     await user.type(screen.getByLabelText('Simulated AI reply'), '参见〔@I-0000000000000000〕')
     await user.click(screen.getByRole('button', { name: 'Rehydrate locally' }))
@@ -112,7 +129,7 @@ describe('SanitizedPreviewView', () => {
     })
     const user = userEvent.setup()
 
-    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    renderInEnglish(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
     await user.click(screen.getByRole('button', { name: 'Copy sanitized document' }))
     expect(await screen.findByText('Sanitized document copied.')).toBeDefined()
     await user.click(screen.getByRole('button', { name: 'Export sanitized document…' }))
@@ -131,6 +148,27 @@ describe('SanitizedPreviewView', () => {
       .map(([, payload]) => payload)
     expect(JSON.stringify(deliveryPayloads)).not.toContain('Holder One')
     expect(JSON.stringify(deliveryPayloads)).not.toContain('@N-ABC123')
+  })
+
+  it('retranslates an existing sanitized-document delivery status when the locale changes', async () => {
+    const preview: SanitizedPreview = {
+      status: 'AVAILABLE',
+      sanitizedDocumentId: 'sanitized-1',
+      createdAt: 1,
+      blocks: [{ blockId: 'block-1', pageNo: 1, readingOrder: 0, text: 'Holder One〔@N-ABC123〕' }]
+    }
+    invoke.mockImplementation((channel: string) =>
+      Promise.resolve(channel === 'preview:copySanitized' ? { ok: true, data: { copied: true } } : { ok: true, data: null })
+    )
+    const user = userEvent.setup()
+
+    renderWithLanguageToggle(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    await user.click(screen.getByRole('button', { name: 'Copy sanitized document' }))
+    expect(await screen.findByText('Sanitized document copied.')).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Switch to Chinese' }))
+    expect(screen.getByText('已复制脱敏文档。')).toBeDefined()
+    expect(screen.queryByText('Sanitized document copied.')).toBeNull()
   })
 
   it('runs Mock AI and displays sanitized and locally rehydrated responses', async () => {
@@ -158,7 +196,7 @@ describe('SanitizedPreviewView', () => {
       })
     const user = userEvent.setup()
 
-    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    renderInEnglish(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
     await user.click(screen.getByRole('button', { name: 'Send sanitized document' }))
 
     expect(invoke).toHaveBeenCalledWith('ai:execute', {
@@ -195,7 +233,7 @@ describe('SanitizedPreviewView', () => {
     })
     const user = userEvent.setup()
 
-    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    renderInEnglish(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
     expect(await screen.findByText('Analysis: Synthetic Person')).toBeDefined()
     await user.click(screen.getByRole('button', { name: 'Copy restored response' }))
     expect(await screen.findByText('Restored response copied.')).toBeDefined()
@@ -217,6 +255,41 @@ describe('SanitizedPreviewView', () => {
       .map(([, payload]) => payload)
     expect(JSON.stringify(deliveryPayloads)).not.toContain(completed.sanitizedResponse)
     expect(JSON.stringify(deliveryPayloads)).not.toContain(completed.rehydratedResponse)
+  })
+
+  it('retranslates an existing AI-result delivery status when the locale changes', async () => {
+    const preview: SanitizedPreview = {
+      status: 'AVAILABLE',
+      sanitizedDocumentId: 'sanitized-1',
+      createdAt: 1,
+      blocks: [{ blockId: 'block-1', pageNo: 1, readingOrder: 0, text: 'Holder One〔@N-ABC123〕' }]
+    }
+    const completed = {
+      id: 'ai-1',
+      sanitizedDocumentId: 'sanitized-1',
+      providerId: 'mock-v1',
+      status: 'COMPLETED',
+      sanitizedResponse: 'Sanitized response',
+      rehydratedResponse: 'Restored response',
+      unresolvedTokens: [],
+      createdAt: 1,
+      finishedAt: 2
+    }
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'ai:latest') return Promise.resolve({ ok: true, data: completed })
+      if (channel === 'ai:copyResult') return Promise.resolve({ ok: true, data: { copied: true } })
+      return Promise.resolve({ ok: true, data: null })
+    })
+    const user = userEvent.setup()
+
+    renderWithLanguageToggle(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    expect(await screen.findByText('Restored response')).toBeDefined()
+    await user.click(screen.getByRole('button', { name: 'Copy restored response' }))
+    expect(await screen.findByText('Restored response copied.')).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Switch to Chinese' }))
+    expect(screen.getByText('已复制还原回复。')).toBeDefined()
+    expect(screen.queryByText('Restored response copied.')).toBeNull()
   })
 
   it('drops a stale Mock AI result after the sanitized document switches', async () => {
@@ -243,7 +316,7 @@ describe('SanitizedPreviewView', () => {
     })
     const user = userEvent.setup()
 
-    const view = render(<SanitizedPreviewView documentId="document-1" preview={previewA} onGenerated={() => {}} />)
+    const view = renderInEnglish(<SanitizedPreviewView documentId="document-1" preview={previewA} onGenerated={() => {}} />)
     await user.click(screen.getByRole('button', { name: 'Send sanitized document' }))
     view.rerender(<SanitizedPreviewView documentId="document-2" preview={previewB} onGenerated={() => {}} />)
 
@@ -307,7 +380,7 @@ describe('SanitizedPreviewView', () => {
     })
     const user = userEvent.setup()
 
-    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    renderInEnglish(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
     expect(await screen.findByText('Withheld-by-policy view')).toBeDefined()
 
     await user.click(screen.getByLabelText('Restore RESTORE_ON_REQUEST values locally'))
@@ -372,7 +445,7 @@ describe('SanitizedPreviewView', () => {
     })
     const user = userEvent.setup()
 
-    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    renderInEnglish(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
     await user.click(screen.getByRole('button', { name: 'Send sanitized document' }))
     expect(await screen.findByText('Fresh restored')).toBeDefined()
 
@@ -401,7 +474,7 @@ describe('SanitizedPreviewView', () => {
     })
     const user = userEvent.setup()
 
-    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    renderInEnglish(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
     await user.click(screen.getByRole('button', { name: 'Send sanitized document' }))
     await user.click(screen.getByLabelText('Restore RESTORE_ON_REQUEST values locally'))
 
@@ -429,7 +502,7 @@ describe('SanitizedPreviewView', () => {
     })
     const user = userEvent.setup()
 
-    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    renderInEnglish(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
     await user.click(screen.getByRole('button', { name: 'Send sanitized document' }))
 
     expect(await screen.findByText('AI provider request failed')).toBeDefined()
@@ -453,7 +526,7 @@ describe('SanitizedPreviewView', () => {
     })
     const user = userEvent.setup()
 
-    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    renderInEnglish(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
     // Policy A (includeRestoreOnRequest=false) starts, then the user switches
     // to policy B and starts a second execution while A is still in flight.
     await user.click(screen.getByRole('button', { name: 'Send sanitized document' }))
@@ -505,7 +578,7 @@ describe('SanitizedPreviewView', () => {
     })
     const user = userEvent.setup()
 
-    render(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
+    renderInEnglish(<SanitizedPreviewView documentId="document-1" preview={preview} onGenerated={() => {}} />)
     await user.click(screen.getByRole('button', { name: 'Send sanitized document' }))
     await user.click(screen.getByLabelText('Restore RESTORE_ON_REQUEST values locally'))
     await user.click(screen.getByRole('button', { name: 'Send sanitized document' }))
