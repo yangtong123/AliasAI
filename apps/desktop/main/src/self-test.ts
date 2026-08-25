@@ -67,6 +67,39 @@ export async function runSelfTest(app: SelfTestApp, safeStorage: SafeStorage): P
     runtime = await initializeRuntime(app, safeStorage)
     stage('runtime-initialized')
 
+    const { sanitizedDocumentId, sanitized } = await runAcceptanceChain(runtime, userData, stage)
+
+    const ai = await runtime.services.ai.execute(sanitizedDocumentId, true)
+    assert(ai.sanitizedResponse === `Mock analysis:\n${sanitized}`, 'ai', 'provider response mismatch')
+    assert(!ai.sanitizedResponse.includes('110101199003077774'), 'ai', 'provider response leaked a protected value')
+    assert(ai.rehydratedResponse.includes('110101199003077774'), 'rehydration', 'ID value was not restored locally')
+    assert(ai.rehydratedResponse.includes('synthetic@example.test'), 'rehydration', 'email was not restored locally')
+    assert(ai.unresolvedTokens.length === 0, 'rehydration', 'unexpected unresolved tokens')
+    stage('ai-and-rehydration')
+
+    return { stages, sanitizedSample: sanitized }
+  } finally {
+    runtime?.close()
+    await rm(userData, { recursive: true, force: true })
+  }
+}
+
+export interface AcceptanceChainResult {
+  readonly sanitizedDocumentId: string
+  readonly sanitized: string
+}
+
+/**
+ * The shared pipeline chain up to (not including) the AI stage:
+ * Matter -> import -> parse -> detect -> resolve -> review -> sanitization.
+ * Both the packaged Mock self-test and the network-provider self-test drive
+ * it, so their coverage of the privacy pipeline stays identical.
+ */
+export async function runAcceptanceChain(
+  runtime: AliasAiRuntime,
+  userData: string,
+  stage: (name: string) => void
+): Promise<AcceptanceChainResult> {
     const matter = runtime.services.matters.create('AliasAI Self-Test Matter')
     const sourcePath = join(userData, 'synthetic.pdf')
     await writeFile(sourcePath, syntheticPdf('Holder 110101199003077774 synthetic@example.test.'))
@@ -108,17 +141,5 @@ export async function runSelfTest(app: SelfTestApp, safeStorage: SafeStorage): P
     assert((sanitized.match(/〔@[IET]-[A-Z0-9]+〕/g) ?? []).length === 2, 'sanitization', 'expected two pseudonym tokens')
     stage('sanitized')
 
-    const ai = await runtime.services.ai.execute(generated.sanitizedDocumentId, true)
-    assert(ai.sanitizedResponse === `Mock analysis:\n${sanitized}`, 'ai', 'provider response mismatch')
-    assert(!ai.sanitizedResponse.includes('110101199003077774'), 'ai', 'provider response leaked a protected value')
-    assert(ai.rehydratedResponse.includes('110101199003077774'), 'rehydration', 'ID value was not restored locally')
-    assert(ai.rehydratedResponse.includes('synthetic@example.test'), 'rehydration', 'email was not restored locally')
-    assert(ai.unresolvedTokens.length === 0, 'rehydration', 'unexpected unresolved tokens')
-    stage('ai-and-rehydration')
-
-    return { stages, sanitizedSample: sanitized }
-  } finally {
-    runtime?.close()
-    await rm(userData, { recursive: true, force: true })
-  }
+    return { sanitizedDocumentId: generated.sanitizedDocumentId, sanitized }
 }

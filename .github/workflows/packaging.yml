@@ -53,6 +53,13 @@ jobs:
         env:
           ALIASAI_ALLOW_PLAINTEXT_KEYS: '1'
         run: apps/desktop/release/mac*/AliasAI.app/Contents/MacOS/AliasAI --ui-self-test
+      - name: Exercise the real AI provider path against a loopback endpoint
+        # Same acceptance surface as the self-test, but dispatched through the
+        # OpenAI-compatible HTTP provider against an in-process fake endpoint:
+        # no external network, account, or real API key is involved.
+        env:
+          ALIASAI_ALLOW_PLAINTEXT_KEYS: '1'
+        run: apps/desktop/release/mac*/AliasAI.app/Contents/MacOS/AliasAI --provider-self-test
       - name: Verify the bundle is byte-identical after the acceptance tests
         # The manifest (path, type, permissions, sha256 per file) is compared
         # strictly, so any mutation — not only rule violations — fails here.

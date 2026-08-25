@@ -2,9 +2,11 @@
 
 ## Scope
 
-V1 defines a provider-independent execution boundary and ships a local Mock
-provider. It deliberately does not ship credentials, network provider adapters,
-prompt templates, streaming, tool calls, or conversation history.
+V1 defines a provider-independent execution boundary and ships two providers
+behind it: the deterministic local Mock and an OpenAI-compatible network
+adapter (Settings page, keychain-protected credentials, bounded transport).
+It still deliberately does not ship prompt templates, streaming, tool calls,
+or conversation history.
 
 The only legal provider input is the ordered text of an immutable, persisted
 `SanitizedDocument`. Callers cannot supply arbitrary prompt text through the
@@ -15,6 +17,7 @@ application or renderer API.
 ```ts
 interface AiProviderRequest {
   content: string
+  signal?: AbortSignal   // cooperative cancel; a control channel, not data
 }
 
 interface AiProviderResponse {
@@ -29,7 +32,8 @@ interface AiProvider {
 
 The port intentionally excludes Matter, Document, Block, Mention, Entity, and
 ProtectedValue identifiers; Mapping Vault rows; restoration policies; keys; source
-paths; and decrypted real values. A future vendor adapter must preserve this port.
+paths; and decrypted real values. Both shipped providers preserve this port;
+any future vendor adapter must too.
 
 ## Execution Boundary
 
@@ -56,7 +60,10 @@ paths; and decrypted real values. A future vendor adapter must preserve this por
 7. Fail closed if the request contains a protected plaintext (including format
    variants), internal identifier, malformed or unknown restoration token, or
    omits any artifact token.
-8. Call `AiProvider.execute({ content })` only after the scan succeeds.
+8. Call `AiProvider.execute({ content, signal })` only after the scan succeeds.
+   `signal` is the service's cooperative cancel channel; aborting it makes the
+   execution fail closed as `AI_CANCELLED` through the same encrypted,
+   code-only failure path (no partial response is ever kept).
 9. Encrypt and persist the sanitized provider response, or persist a stable
    code-only failure. Raw provider errors and stacks are not persisted or sent over
    IPC.
@@ -64,9 +71,68 @@ paths; and decrypted real values. A future vendor adapter must preserve this por
    policy. Unknown or modified tokens remain visible and are reported for review.
 
 The provider request and response are each limited to 5 MiB. The response must
-additionally be a non-empty string. V1 has no network timeout because the
-shipped Mock provider performs no I/O; a future network adapter must own a
-bounded transport timeout without widening this contract.
+additionally be a non-empty string. The network adapter owns a bounded
+transport timeout (default 120s) plus cancellation and a response-size
+ceiling; the application layer never trusts a provider to police itself.
+
+## Network Provider (OpenAI-Compatible)
+
+`OpenAiCompatibleProvider` (`packages/ai/src/openai-compatible.ts`, provider id
+`openai-compatible-v1`) speaks the OpenAI chat-completions convention:
+`POST {baseUrl}/chat/completions` with `{ model, messages: [{ role: 'user',
+content }], stream: false }`, and parses `choices[0].message.content` as the
+pseudonymized response. Everything else about the transport is fail-closed:
+
+- Base URL must be HTTPS, except HTTP on a loopback host (local models and the
+  packaged self-test). Credentials, query strings, and fragments in the URL
+  are rejected; the API key travels only in the `Authorization` header.
+- Redirects are refused (`redirect: 'error'`): an endpoint that tries to
+  redirect the Authorization header elsewhere fails instead of leaking it.
+- Bounded timeout (default 120s, no retries) and cooperative cancellation via
+  the request's `AbortSignal`; both fail closed as `AI_PROVIDER_FAILURE`
+  executions (`AI_CANCELLED` when the user cancelled).
+- The response body is capped at 5 MiB while it streams in (declared
+  `content-length` is checked first); non-2xx status, non-JSON, missing
+  `choices`, and non-string or empty content all fail closed.
+- Provider errors carry only stable codes and HTTP status numbers
+  (`PROVIDER_TIMEOUT`, `PROVIDER_HTTP_ERROR`, ...). The API key, request
+  content, and response body never appear in an error message.
+
+### Configuration and Credentials
+
+Provider selection and endpoint settings live in the desktop Settings page and
+persist in `userData/aliasai.ai-provider.json` (mode 0o600), written by
+`AiProviderConfigStore` (`apps/desktop/main/src/ai-provider.ts`). The API key
+is stored only as an Electron `safeStorage` (OS keychain) ciphertext blob; it
+never enters SQLite, logs, or audit events, and the stored key is never
+returned to the renderer. A newly typed key exists transiently in the settings
+form and crosses IPC only in the explicit save or test request the user
+initiated. The `ALIASAI_ALLOW_PLAINTEXT_KEYS=1` development/CI fallback
+mirrors the key store and stores a clearly marked plaintext field. Writes go
+through a mode-0600
+temporary file and an atomic rename (no truncated config after a crash, and
+the permission is re-established on every save), and all configuration
+mutations (save, switch, clear) are serialized in invocation order inside the
+main process so a slow earlier save can never reactivate a provider the user
+just cleared. The desktop app enforces a single instance
+(`requestSingleInstanceLock`) so those mutations are always serialized within
+exactly one main process per `userData`; the acceptance modes use throwaway
+`userData` directories and skip the lock.
+
+The renderer sees only a non-sensitive status: active provider (`mock` or
+`openai-compatible`), base URL, model name, and whether a key is configured.
+The stored key never appears in any status, response, or error sent to the
+renderer; a newly typed key travels exactly once, in the save or test request
+the user explicitly triggered.
+
+`AiProviderManager` (behind `AiExecutionService`) delegates to the configured
+provider and fails closed whenever a persisted real-provider configuration
+cannot be used — corrupt file, unreadable path (only a missing file means
+"not configured"), invalid fields, unavailable keychain, or an undecryptable
+key. Executions are refused with a stable code surfaced in Settings; the app
+never silently falls back to the Mock provider, and the `id` exposed for
+execution records always names the configured target
+(`openai-compatible-v1`), never the internal placeholder.
 
 ## Leak Scanner
 
@@ -151,9 +217,9 @@ records `OUTBOUND_LEAK_DETECTED` locally (an oversized request records
 Known limitation: the scan still runs synchronously on the Electron main
 process. The payload cap, the denylist cap, and the character-level streaming
 matcher bound its cost (roughly 0.5s for a pathological 4 MiB all-digit
-payload, far less for prose), but before a real network provider is
-introduced the scan should move off the main thread (for example a
-worker-process matcher).
+payload, far less for prose), so the real network provider ships with the scan
+in place; moving it off the main thread (for example a worker-process matcher)
+remains future hardening work.
 
 ## Desktop IPC
 
@@ -161,6 +227,13 @@ The preload allowlist exposes only:
 
 - `ai:execute({ sanitizedDocumentId, includeRestoreOnRequest? })`
 - `ai:latest({ sanitizedDocumentId, includeRestoreOnRequest? })`
+- `ai:cancel()` — aborts in-flight executions (fail-closed `AI_CANCELLED`)
+- `aiProvider:getStatus()` — non-sensitive provider status (key presence only)
+- `aiProvider:save({ provider: 'mock' } | { provider: 'openai-compatible',
+  baseUrl, model, apiKey? })` — omits `apiKey` to keep the stored key
+- `aiProvider:clear()` — deletes the persisted configuration including the key
+- `aiProvider:testConnection({ baseUrl?, model?, apiKey? }?)` — probes
+  `GET /models` with the form values or the stored configuration
 
 The renderer receives execution metadata, sanitized response text, locally restored
 response text, and unresolved token strings. It never receives Mapping Vault rows,
@@ -168,13 +241,20 @@ encrypted fields, keys, provider internals, or raw errors.
 
 ## Verification Target
 
-The V1 end-to-end test covers:
+The V1 end-to-end tests cover:
 
 ```text
 synthetic PDF -> Block -> Mention -> Entity -> SanitizedDocument
-              -> outbound scan -> MockAiProvider -> encrypted response
+              -> outbound scan -> provider -> encrypted response
               -> local Rehydration
 ```
+
+with the provider being the Mock (`packages/application` e2e), the real HTTP
+adapter against a loopback OpenAI-compatible fake (`packages/ai` transport
+tests: auth header, request shape, HTTP/timeout/abort/oversize/invalid-shape
+failures, key-free error messages), and the packaged app itself
+(`--provider-self-test`: full chain over the real HTTP adapter plus
+restart-recovery of the keychain-wrapped configuration).
 
 Negative tests cover protected plaintext, internal identifiers, unknown/malformed/
 missing tokens, provider failure redaction, cross-row ciphertext swaps, database

@@ -105,6 +105,7 @@ for `dir` + `zip` targets. Output lands in `apps/desktop/release/`
 ```sh
 node apps/desktop/scripts/audit-package.mjs [path/to/AliasAI.app]
 AliasAI.app/Contents/MacOS/AliasAI --self-test
+AliasAI.app/Contents/MacOS/AliasAI --provider-self-test
 AliasAI.app/Contents/MacOS/AliasAI --ui-self-test
 ```
 
@@ -126,6 +127,14 @@ AliasAI.app/Contents/MacOS/AliasAI --ui-self-test
   resolve → review → sanitization → Mock AI → local rehydration. It prints a
   JSON stage summary and exits non-zero on any failure. On machines without
   an interactive keychain (CI), run it with `ALIASAI_ALLOW_PLAINTEXT_KEYS=1`.
+- **Provider self-test** drives the same chain but dispatches the AI stage
+  through the real OpenAI-compatible HTTP provider against an in-process
+  loopback fake endpoint (`--provider-self-test`). No external network,
+  account, or real API key is involved: the fake endpoint asserts the
+  Authorization header, the exact chat-completions request shape, and that no
+  protected plaintext ever crossed the wire; the app then restarts its runtime
+  to prove the keychain-wrapped provider configuration survives relaunch.
+  Runs with the same `ALIASAI_ALLOW_PLAINTEXT_KEYS=1` CI fallback.
 - **UI self-test** creates a real sandboxed Electron `BrowserWindow` and drives
   the production React → bundled preload → validated IPC → application stack.
   It clicks the same controls a tester uses through Matter creation, PDF
@@ -137,14 +146,17 @@ AliasAI.app/Contents/MacOS/AliasAI --ui-self-test
 All gates run in CI for every push to `main` and on pull requests that touch
 the app, packages, or worker sources
 (`.github/workflows/packaging.yml`, `macos-15` arm64 + `macos-15-intel` x64
-matrix): audit → manifest record → service self-test → UI self-test → strict manifest re-check, and
+matrix): audit → manifest record → service self-test → UI self-test →
+provider self-test → strict manifest re-check, and
 the zips are uploaded as artifacts.
 
 ## User data, upgrades, and troubleshooting
 
 - All persistent state lives under
   `~/Library/Application Support/AliasAI/` (`userData`): `aliasai.db`
-  (SQLite database) and `aliasai.keys` (safeStorage-wrapped keys). Nothing is
+  (SQLite database), `aliasai.keys` (safeStorage-wrapped keys), and
+  `aliasai.ai-provider.json` (AI provider selection; the OpenAI-compatible
+  API key inside it is safeStorage-wrapped). Nothing is
   written inside the `.app` bundle. The sole intentional exception is a text
   export after the user explicitly chooses a destination in the native save
   dialog; copying similarly places the selected result on the OS clipboard.
@@ -160,4 +172,6 @@ the zips are uploaded as artifacts.
 - `PYTHON_RUNTIME_UNAVAILABLE` at startup means the bundled Python resources
   are missing or damaged — reinstall the app.
 - The app is current-user only; documents never leave the machine except as
-  sanitized content through the configured AI provider (Mock in V1).
+  sanitized content through the configured AI provider (offline Mock by
+  default, or the OpenAI-compatible endpoint the user configures in
+  Settings).

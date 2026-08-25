@@ -1,4 +1,4 @@
-import { cleanup, screen } from '@testing-library/react'
+import { cleanup, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DocumentReviewDTO, DocumentSummaryDTO, MatterSummaryDTO } from '@aliasai/application'
@@ -94,6 +94,60 @@ describe('App workspace recovery', () => {
 
     expect(await screen.findByRole('button', { name: 'New Matter' })).toBeDefined()
     expect(listCalls).toBe(2)
+  })
+})
+
+describe('App settings navigation lock', () => {
+  const invoke = vi.fn()
+
+  beforeEach(() => {
+    invoke.mockReset()
+    localStorage.clear()
+    ;(window as { aliasAi: unknown }).aliasAi = { invoke }
+  })
+
+  afterEach(() => {
+    cleanup()
+    localStorage.clear()
+    vi.restoreAllMocks()
+  })
+
+  it('keeps the settings page mounted while a provider save is in flight', async () => {
+    let resolveSave!: (envelope: unknown) => void
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'matter:list') return Promise.resolve({ ok: true, data: [] })
+      if (channel === 'aiProvider:getStatus') {
+        return Promise.resolve({
+          ok: true,
+          data: { provider: 'openai-compatible', openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-synthetic', apiKeyConfigured: true }, configErrorCode: null }
+        })
+      }
+      if (channel === 'aiProvider:save') {
+        return new Promise((resolve) => {
+          resolveSave = resolve
+        })
+      }
+      return Promise.resolve({ ok: true, data: null })
+    })
+    const user = userEvent.setup()
+
+    renderInEnglish(<App />)
+    await user.click(await screen.findByRole('button', { name: 'Settings' }))
+    await user.click(await screen.findByRole('radio', { name: 'OpenAI-compatible (network)' }))
+    await user.type(screen.getByLabelText('Model name'), 'gpt-other')
+    await user.click(screen.getByRole('button', { name: 'Save provider settings' }))
+
+    // Both ways out of the settings page are blocked while the save is in
+    // flight; otherwise remounting the page would reset its operation mutex.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Settings' })).toHaveProperty('disabled', true)
+    })
+    expect(screen.getByRole('button', { name: 'Back to workspace' })).toHaveProperty('disabled', true)
+
+    resolveSave({ ok: true, data: { provider: 'openai-compatible', openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-other', apiKeyConfigured: true }, configErrorCode: null } })
+    await screen.findByText('Provider settings saved.')
+    expect(screen.getByRole('button', { name: 'Settings' })).toHaveProperty('disabled', false)
+    expect(screen.getByRole('button', { name: 'Back to workspace' })).toHaveProperty('disabled', false)
   })
 })
 

@@ -177,9 +177,11 @@ function service(input: {
 
 describe('AiExecutionService', () => {
   it('sends only persisted sanitized Block text and rehydrates the response locally', async () => {
-    const execute = vi.fn(async (request: { readonly content: string }) => ({
-      content: `结论：${request.content}`
-    }))
+    const execute = vi.fn(
+      async (request: { readonly content: string; readonly signal?: AbortSignal }) => ({
+        content: `结论：${request.content}`
+      })
+    )
     const provider: AiProvider = { id: 'mock-v1', execute }
     const { executions, store } = service({ provider })
 
@@ -191,7 +193,10 @@ describe('AiExecutionService', () => {
       unresolvedTokens: []
     })
     expect(execute).toHaveBeenCalledTimes(1)
-    expect(Object.keys(execute.mock.calls[0]![0])).toEqual(['content'])
+    // Only the sanitized content plus the cooperative cancel signal — never
+    // Matter, Entity, Mapping, or decrypted values — crosses the provider port.
+    expect(Object.keys(execute.mock.calls[0]![0])).toEqual(['content', 'signal'])
+    expect(execute.mock.calls[0]![0].signal).toBeInstanceOf(AbortSignal)
 
     const record = store.records.get('ai-execution-1')!
     expect(record.status).toBe('COMPLETED')
@@ -463,7 +468,47 @@ describe('AiExecutionService', () => {
       status: 'COMPLETED',
       unresolvedTokens: ['@N-ABC123', '@N-UNKNOWN']
     })
-    expect(execute.mock.calls[0]![0]).toEqual({ content: `原告甲〔${token}〕提交证据。` })
+    expect(execute.mock.calls[0]![0]).toEqual({
+      content: `原告甲〔${token}〕提交证据。`,
+      signal: expect.any(AbortSignal)
+    })
+  })
+
+  it('fails closed as AI_CANCELLED, with no partial response, when the user cancels', async () => {
+    const execute = vi.fn(
+      (request: { readonly signal?: AbortSignal }) =>
+        new Promise<{ content: string }>((_resolve, reject) => {
+          request.signal?.addEventListener('abort', () => reject(new Error('transport aborted')), { once: true })
+        })
+    )
+    const { executions, store } = service({ provider: { id: 'mock-v1', execute } })
+
+    const pending = executions.execute('sanitized-1')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(executions.cancelActive()).toBe(1)
+    await expect(pending).rejects.toMatchObject({ code: 'AI_CANCELLED' })
+
+    const record = store.records.get('ai-execution-1')!
+    expect(record.status).toBe('FAILED')
+    expect(record.responseCipher).toBeUndefined()
+    expect(
+      decrypt(record.errorCipher!, persistenceKey, aiExecutionErrorContext(record.id)).toString('utf8')
+    ).toBe('{"code":"AI_CANCELLED"}')
+    // No abort controller leaks across executions.
+    expect(executions.cancelActive()).toBe(0)
+  })
+
+  it('keeps a genuine provider failure classified even if cancellation races it', async () => {
+    const { executions, store } = service({
+      provider: { id: 'mock-v1', execute: vi.fn(async () => Promise.reject(new Error('provider broke'))) }
+    })
+
+    await expect(executions.execute('sanitized-1')).rejects.toMatchObject({ code: 'AI_PROVIDER_FAILURE' })
+    const record = store.records.get('ai-execution-1')!
+    expect(
+      decrypt(record.errorCipher!, persistenceKey, aiExecutionErrorContext(record.id)).toString('utf8')
+    ).toBe('{"code":"AI_PROVIDER_FAILURE"}')
+    expect(executions.cancelActive()).toBe(0)
   })
 
   it('authenticates response ciphertext to its execution row', () => {

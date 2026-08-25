@@ -24,7 +24,7 @@ type DeliveryMessageKey =
  * from one document can ever render for another.
  */
 export function AiExecutionPanel(props: { readonly sanitizedDocumentId: string }) {
-  const { t, formatError } = useI18n()
+  const { t, formatError, label } = useI18n()
   const [includeOnRequest, setIncludeOnRequest] = useState(false)
   const sourceKey = `${props.sanitizedDocumentId}:${includeOnRequest}`
   const [panel, setPanel] = useState<PanelState>(() => ({
@@ -86,6 +86,7 @@ export function AiExecutionPanel(props: { readonly sanitizedDocumentId: string }
   })
   const runPending = run.pending && mutationKey === sourceKey
   const runError = mutationKey === sourceKey ? run.error : null
+  const cancel = useMutation(() => invoke('ai:cancel', {}))
   const copy = useMutation((executionId: string, variant: ResultVariant) =>
     invoke('ai:copyResult', { executionId, variant, includeRestoreOnRequest: includeOnRequest })
   )
@@ -120,9 +121,17 @@ export function AiExecutionPanel(props: { readonly sanitizedDocumentId: string }
       <button type="button" disabled={runPending} onClick={() => void run.run()}>
         {t(runPending ? 'ai.runningButton' : 'ai.send')}
       </button>
+      {runPending && (
+        <button type="button" disabled={cancel.pending} onClick={() => void cancel.run()}>
+          {t('ai.cancel')}
+        </button>
+      )}
+      {cancel.error !== null && <p className="error">{formatError(cancel.error)}</p>}
       {(runError ?? loadError) !== null && <p className="error">{formatError((runError ?? loadError)!)}</p>}
       {execution?.status === 'RUNNING' && <p>{t('ai.running')}</p>}
-      {execution?.status === 'FAILED' && <p className="error">{t('ai.failed', { code: execution.errorCode })}</p>}
+      {execution?.status === 'FAILED' && (
+        <p className="error">{t('ai.failed', { code: label(execution.errorCode) })}</p>
+      )}
       {execution?.status === 'COMPLETED' && (
         <div className="ai-results">
           <h4>{t('ai.sanitizedResponse')}</h4>

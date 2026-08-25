@@ -19,6 +19,8 @@ const en = {
   'documents.import': 'Import PDF…',
   'nav.review': 'Review',
   'nav.preview': 'Sanitized preview',
+  'nav.settings': 'Settings',
+  'nav.closeSettings': 'Back to workspace',
   'workspace.noReview': 'No review data',
   'workspace.select': 'Select a matter and document',
   'pipeline.parse': 'Parse',
@@ -81,11 +83,12 @@ const en = {
   'preview.useSanitized': 'Use sanitized text',
   'preview.unresolved': 'Unresolved tokens for manual review: {tokens}',
   'preview.regenerate': 'Regenerate',
-  'ai.title': 'Mock AI',
+  'ai.title': 'AI analysis',
   'ai.hint': 'Only the persisted sanitized document is sent. Restoration happens locally.',
   'ai.restoreOnRequest': 'Restore RESTORE_ON_REQUEST values locally',
   'ai.runningButton': 'Running…',
   'ai.send': 'Send sanitized document',
+  'ai.cancel': 'Cancel AI execution',
   'ai.running': 'AI execution is running.',
   'ai.failed': 'AI execution failed: {code}',
   'ai.sanitizedResponse': 'Sanitized AI response',
@@ -99,7 +102,31 @@ const en = {
   'ai.sanitizedSaved': 'Sanitized response saved.',
   'ai.restoredCopied': 'Restored response copied.',
   'ai.restoredSaved': 'Restored response saved.',
-  'ai.unresolved': 'Unresolved tokens: {tokens}'
+  'ai.unresolved': 'Unresolved tokens: {tokens}',
+  'settings.providerTitle': 'AI provider',
+  'settings.providerIntro':
+    'Choose where sanitized documents are sent. The Mock provider stays fully offline; the OpenAI-compatible provider sends only the sanitized document to the endpoint you configure.',
+  'settings.current': 'Current provider: {provider}',
+  'settings.provider.mock': 'Mock (offline)',
+  'settings.provider.mockHint': 'Deterministic local echo; no network access.',
+  'settings.provider.openai': 'OpenAI-compatible (network)',
+  'settings.provider.openaiHint':
+    'HTTPS only (local models on a loopback host may use HTTP). The API key is encrypted with the OS keychain and is sent only to the endpoint you configure, in the Authorization header — it never enters logs or the database.',
+  'settings.baseUrl': 'API Base URL',
+  'settings.baseUrlPlaceholder': 'https://api.openai.com/v1',
+  'settings.model': 'Model name',
+  'settings.modelPlaceholder': 'gpt-4o-mini',
+  'settings.apiKey': 'API Key',
+  'settings.apiKeyConfigured': 'Configured — leave blank to keep the current key',
+  'settings.apiKeyMissing': 'Not configured',
+  'settings.save': 'Save provider settings',
+  'settings.saving': 'Saving…',
+  'settings.saved': 'Provider settings saved.',
+  'settings.test': 'Test connection',
+  'settings.testing': 'Testing…',
+  'settings.testOk': 'Connection succeeded (HTTP {status}).',
+  'settings.clear': 'Delete provider configuration',
+  'settings.configError': 'The saved provider configuration cannot be used ({code}). Re-enter the settings below and save.'
 } as const
 
 type TranslationKey = keyof typeof en
@@ -120,6 +147,8 @@ const zh = {
   'documents.import': '导入 PDF…',
   'nav.review': '审查',
   'nav.preview': '脱敏预览',
+  'nav.settings': '设置',
+  'nav.closeSettings': '返回工作台',
   'workspace.noReview': '暂无审查数据',
   'workspace.select': '请选择事项和文档',
   'pipeline.parse': '解析',
@@ -182,11 +211,12 @@ const zh = {
   'preview.useSanitized': '使用脱敏文本',
   'preview.unresolved': '需要人工检查的未还原令牌：{tokens}',
   'preview.regenerate': '重新生成',
-  'ai.title': '模拟 AI',
+  'ai.title': 'AI 分析',
   'ai.hint': '只发送已持久化的脱敏文档；真实内容仅在本地还原。',
   'ai.restoreOnRequest': '在本地还原“按需还原”的值',
   'ai.runningButton': '正在运行…',
   'ai.send': '发送脱敏文档',
+  'ai.cancel': '取消 AI 处理',
   'ai.running': 'AI 正在处理。',
   'ai.failed': 'AI 处理失败：{code}',
   'ai.sanitizedResponse': '脱敏后的 AI 回复',
@@ -200,7 +230,31 @@ const zh = {
   'ai.sanitizedSaved': '已保存脱敏回复。',
   'ai.restoredCopied': '已复制还原回复。',
   'ai.restoredSaved': '已保存还原回复。',
-  'ai.unresolved': '未还原令牌：{tokens}'
+  'ai.unresolved': '未还原令牌：{tokens}',
+  'settings.providerTitle': 'AI 服务提供商',
+  'settings.providerIntro':
+    '选择脱敏文档的发送去向。模拟提供商完全离线；OpenAI 兼容提供商只把脱敏文档发送到你配置的服务端。',
+  'settings.current': '当前提供商：{provider}',
+  'settings.provider.mock': '模拟（离线）',
+  'settings.provider.mockHint': '确定性的本地回声，不访问网络。',
+  'settings.provider.openai': 'OpenAI 兼容（联网）',
+  'settings.provider.openaiHint':
+    '仅支持 HTTPS（本机回环地址上的本地模型可使用 HTTP）。API Key 由系统钥匙串加密保存，只会在请求时通过 Authorization 头发送到你配置的服务端，绝不写入日志或数据库。',
+  'settings.baseUrl': 'API Base URL',
+  'settings.baseUrlPlaceholder': 'https://api.openai.com/v1',
+  'settings.model': '模型名称',
+  'settings.modelPlaceholder': 'gpt-4o-mini',
+  'settings.apiKey': 'API Key',
+  'settings.apiKeyConfigured': '已配置——留空保持现有密钥',
+  'settings.apiKeyMissing': '未配置',
+  'settings.save': '保存提供商设置',
+  'settings.saving': '正在保存…',
+  'settings.saved': '提供商设置已保存。',
+  'settings.test': '测试连接',
+  'settings.testing': '正在测试…',
+  'settings.testOk': '连接成功（HTTP {status}）。',
+  'settings.clear': '删除提供商配置',
+  'settings.configError': '已保存的提供商配置不可用（{code}）。请在下方重新填写并保存。'
 } satisfies Record<TranslationKey, string>
 
 const translations: Record<Locale, Record<TranslationKey, string>> = { en, 'zh-CN': zh }
@@ -219,7 +273,8 @@ const codeLabels: Record<Locale, Readonly<Record<string, string>>> = {
     NAME_EXACT: 'Exact name', EXACT_NAME: 'Exact name', SHARED_PROTECTED_VALUE: 'Shared protected value',
     USER_MUST_LINK: 'User Must-Link', USER_CANNOT_LINK: 'User Cannot-Link',
     CONFLICTING_ID_CARD: 'Conflicting ID card', UNSUPPORTED_TYPE: 'Unsupported type', INACTIVE_ENTITY: 'Inactive entity',
-    MISSING_ALIAS: 'Missing alias', MISSING_TOKEN: 'Missing restoration token', CANNOT_LINK: 'Cannot-Link', MUST_LINK: 'Must-Link'
+    MISSING_ALIAS: 'Missing alias', MISSING_TOKEN: 'Missing restoration token', CANNOT_LINK: 'Cannot-Link', MUST_LINK: 'Must-Link',
+    AI_CANCELLED: 'Cancelled'
   },
   'zh-CN': {
     IMPORTED: '已导入', PARSING: '解析中', PARSED: '已解析', DETECTING: '检测中', DETECTED: '已检测',
@@ -234,7 +289,7 @@ const codeLabels: Record<Locale, Readonly<Record<string, string>>> = {
     SHARED_PROTECTED_VALUE: '受保护值相同', USER_MUST_LINK: '用户要求关联',
     USER_CANNOT_LINK: '用户禁止关联', CONFLICTING_ID_CARD: '身份证号冲突', UNSUPPORTED_TYPE: '暂不支持的类型',
     INACTIVE_ENTITY: '实体已停用', MISSING_ALIAS: '缺少别名', MISSING_TOKEN: '缺少还原令牌',
-    CANNOT_LINK: '禁止关联', MUST_LINK: '必须关联'
+    CANNOT_LINK: '禁止关联', MUST_LINK: '必须关联', AI_CANCELLED: '已取消'
   }
 }
 
@@ -266,6 +321,23 @@ const chineseErrors: Readonly<Record<string, string>> = {
   SANITIZED_DOCUMENT_NOT_AVAILABLE: '脱敏文档不可用，请重新生成。',
   AI_RESULT_NOT_AVAILABLE: 'AI 结果不可用，请重新运行。',
   AI_PROVIDER_FAILURE: 'AI 服务执行失败，请重试。',
+  AI_CANCELLED: 'AI 处理已取消。',
+  AI_PROVIDER_NOT_CONFIGURED: '请先完整填写提供商配置（Base URL、模型名称和 API Key）。',
+  AI_PROVIDER_NOT_READY: 'AI 提供商尚未初始化完成，请稍后重试。',
+  AI_PROVIDER_KEY_MISSING: '请填写 API Key。',
+  AI_PROVIDER_KEYSTORE_UNAVAILABLE: '系统密钥库不可用，无法安全保存 API Key。',
+  AI_PROVIDER_KEY_UNAVAILABLE: '无法读取已保存的 API Key，请重新保存设置。',
+  AI_PROVIDER_CONFIG_CORRUPT: '提供商配置文件已损坏，请重新保存设置。',
+  AI_PROVIDER_CONFIG_UNREADABLE: '无法读取提供商配置文件，请检查文件权限。',
+  PROVIDER_CONFIG_INVALID: '提供商配置无效，请检查 Base URL、模型名称或 API Key。',
+  PROVIDER_TIMEOUT: '连接 AI 服务超时，请重试。',
+  PROVIDER_ABORTED: 'AI 请求已取消。',
+  PROVIDER_HTTP_ERROR: 'AI 服务返回错误，请检查 API Key、模型名称与服务配额。',
+  PROVIDER_RESPONSE_TOO_LARGE: 'AI 服务响应超出大小限制。',
+  PROVIDER_INVALID_RESPONSE: 'AI 服务响应格式无效。',
+  PROVIDER_NETWORK_ERROR: '无法连接 AI 服务端点，请检查网络或 Base URL。',
+  KEYSTORE_UNAVAILABLE: '系统密钥存储不可用。',
+  KEYSTORE_CORRUPT: '本地密钥文件无法读取。',
   INVALID_PROVIDER_RESPONSE: 'AI 返回了无效结果。',
   OUTBOUND_LEAK_DETECTED: '发送前检测到潜在隐私泄漏，已阻止发送。',
   OUTBOUND_PAYLOAD_TOO_LARGE: '脱敏文档超过发送大小限制。',

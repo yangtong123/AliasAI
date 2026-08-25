@@ -1,6 +1,6 @@
 # AliasAI
 
-Local-first, privacy-preserving AI workspace. V1 RC1 provides a Simplified-Chinese-first desktop UI with persistent Chinese/English switching, and runs locally from PDF parsing and privacy detection through entity review, immutable sanitization, privacy-checked Mock AI execution, encrypted response persistence, local rehydration, and explicit copy/export.
+Local-first, privacy-preserving AI workspace. V1 RC1 provides a Simplified-Chinese-first desktop UI with persistent Chinese/English switching, and runs locally from PDF parsing and privacy detection through entity review, immutable sanitization, privacy-checked AI execution (offline Mock or a user-configured OpenAI-compatible provider with keychain-protected credentials), encrypted response persistence, local rehydration, and explicit copy/export.
 
 ## Development
 
@@ -14,7 +14,7 @@ pnpm test:python
 pnpm build
 ```
 
-Install the Python parser and test dependencies with `python3 -m pip install -e '.[dev]'`. Native PDF text parsing is implemented locally with the MIT-licensed `pdfminer.six`. An OCR worker for scanned PDFs (PaddleOCR + pypdfium2 rendering + optional OpenCV preprocessing) is available via the optional `ocr` extra (`python3 -m pip install -e '.[ocr]'`) and the `ALIASAI_OCR_WORKER_PATH` desktop setting. NER and real network AI providers remain intentionally out of scope; V1 uses the replaceable local `MockAiProvider`.
+Install the Python parser and test dependencies with `python3 -m pip install -e '.[dev]'`. Native PDF text parsing is implemented locally with the MIT-licensed `pdfminer.six`. An OCR worker for scanned PDFs (PaddleOCR + pypdfium2 rendering + optional OpenCV preprocessing) is available via the optional `ocr` extra (`python3 -m pip install -e '.[ocr]'`) and the `ALIASAI_OCR_WORKER_PATH` desktop setting. NER remains intentionally out of scope; AI ships the replaceable local `MockAiProvider` plus an OpenAI-compatible network provider behind the same narrow port.
 
 ## Building a distributable app (macOS)
 
@@ -29,6 +29,7 @@ The bundle embeds a pinned standalone Python runtime and the native PDF worker, 
 node apps/desktop/scripts/audit-package.mjs
 apps/desktop/release/mac-arm64/AliasAI.app/Contents/MacOS/AliasAI --self-test
 apps/desktop/release/mac-arm64/AliasAI.app/Contents/MacOS/AliasAI --ui-self-test
+apps/desktop/release/mac-arm64/AliasAI.app/Contents/MacOS/AliasAI --provider-self-test
 ```
 
 CI builds both architectures on every push to `main` and uploads the zips as artifacts. Test-user instructions and acceptance criteria: [docs/rc1-acceptance.md](docs/rc1-acceptance.md). Packaging details: [docs/packaging.md](docs/packaging.md).
@@ -44,7 +45,7 @@ CI builds both architectures on every push to `main` and uploads the zips as art
 - `packages/entity-resolution`: type-specific value normalization, deterministic `er-v1` evidence scoring, and an explainable rule-first proposal gate; it never applies identity mutations.
 - `packages/pseudonymization`: offset-based sanitized text formatting without raw global replacement, plus type-level default restore policies.
 - `packages/rehydration`: Public Token-anchored local restoration.
-- `packages/ai`: vendor-neutral provider port, local Mock provider, and fail-closed outbound privacy scanner.
+- `packages/ai`: vendor-neutral provider port, local Mock provider, OpenAI-compatible network provider (bounded timeout, cancellation, response caps), and fail-closed outbound privacy scanner.
 - `packages/python-bridge`: validated JSON Lines Protocol v1 client with mock, native-PDF, and OCR worker contract tests.
 - `packages/application`: encrypted Matter/document workflows, engine-independent Document processing, transactional Privacy Detection and Entity Resolution, fail-closed Pseudonymization, provider-independent AI execution, and policy-filtered local Rehydration.
 - `python/document_parser`: native PDF text extraction plus a protocol mock; parser output contains pages and normalized text blocks only.

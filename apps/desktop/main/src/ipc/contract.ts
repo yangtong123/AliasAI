@@ -11,6 +11,21 @@ import type {
   RehydrationResult
 } from '@aliasai/application'
 import type { EntityConstraintType, EntityType } from '@aliasai/domain'
+import type { AiProviderStatus } from '../ai-provider'
+
+/**
+ * Provider settings the renderer may submit. The API key crosses IPC only in
+ * this explicit user action (typed in the settings form); it is never part of
+ * any response, status, or log line.
+ */
+export type AiProviderSaveRequest =
+  | { readonly provider: 'mock' }
+  | {
+      readonly provider: 'openai-compatible'
+      readonly baseUrl: string
+      readonly model: string
+      readonly apiKey?: string
+    }
 
 /**
  * The renderer <-> main IPC contract. One entry per channel: `request` is what
@@ -85,6 +100,14 @@ export interface AliasAiInvokeMap {
     request: { executionId: string; variant: 'SANITIZED' | 'REHYDRATED'; includeRestoreOnRequest?: boolean }
     response: { saved: boolean }
   }
+  'ai:cancel': { request: Record<string, never>; response: { cancelled: number } }
+  'aiProvider:getStatus': { request: Record<string, never>; response: AiProviderStatus }
+  'aiProvider:save': { request: AiProviderSaveRequest; response: AiProviderStatus }
+  'aiProvider:clear': { request: Record<string, never>; response: AiProviderStatus }
+  'aiProvider:testConnection': {
+    request: { baseUrl?: string; model?: string; apiKey?: string }
+    response: { httpStatus: number }
+  }
 }
 
 export type AliasAiChannel = keyof AliasAiInvokeMap & string
@@ -112,5 +135,10 @@ export const ALIASAI_CHANNELS: readonly AliasAiChannel[] = [
   'ai:execute',
   'ai:latest',
   'ai:copyResult',
-  'ai:exportResult'
+  'ai:exportResult',
+  'ai:cancel',
+  'aiProvider:getStatus',
+  'aiProvider:save',
+  'aiProvider:clear',
+  'aiProvider:testConnection'
 ]

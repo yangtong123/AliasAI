@@ -48,8 +48,9 @@ V1 intentionally keeps privacy core and AI network access inside the same Electr
 
 The desktop review workflow is the first operable local loop: create a Matter,
 import a PDF, run parse → detect → resolve, review mentions, generate the
-sanitized preview, send that persisted artifact to the local Mock AI provider,
-and compare the sanitized response with its locally rehydrated result.
+sanitized preview, send that persisted artifact to the configured AI provider
+(the offline Mock, or the OpenAI-compatible network provider), and compare the
+sanitized response with its locally rehydrated result.
 
 Layering and boundary rules:
 
@@ -93,10 +94,21 @@ Layering and boundary rules:
   document data.
 - **AI boundary**: the renderer sends only a `sanitizedDocumentId`; the main
   process reloads the immutable artifact from SQLite. The `AiProvider` receives
-  exactly `{ content }`, never a Matter/Document/Entity/Mention ID, key, mapping,
-  restore policy, or ProtectedValue. The Mapping Vault is absent from preview and
+  exactly `{ content, signal }` (text plus a cooperative cancel signal), never
+  a Matter/Document/Entity/Mention ID, key, mapping, restore policy, or
+  ProtectedValue. The Mapping Vault is absent from preview and
   AI IPC DTOs. The renderer may display the final locally restored text, but it
   cannot retrieve the mapping or perform restoration itself.
+- **AI provider settings**: a renderer Settings page switches between the
+  offline Mock and the OpenAI-compatible network provider (custom base URL,
+  model, API key). The key is encrypted with Electron `safeStorage` and stored
+  in `userData/aliasai.ai-provider.json` — never in SQLite or logs. The stored
+  key is never returned to the renderer, which only learns whether a key is
+  configured; a newly typed key crosses IPC only in the explicit save or test
+  request. When a stored network configuration cannot be used, executions
+  fail closed instead of silently falling back to the Mock provider. See
+  `docs/ai-integration.md` for the transport rules (HTTPS-or-loopback, no
+  redirects, bounded timeout, cancel, response-size ceiling).
 
 Key bootstrap: main generates the persistence and search keys on first run and
 persists them via Electron `safeStorage` (OS keychain) in `userData`. The
@@ -129,6 +141,12 @@ Known V1 limitations (deliberate):
   marked PARSED with unparsed content.
 - MIXED pages emit only their native text layer; image regions on mixed pages
   are not OCRed in V1.
+- The outbound privacy scan still runs synchronously on the main process
+  before provider dispatch; its cost is bounded (see `docs/ai-integration.md`)
+  and moving it to a worker process is future hardening.
+- The OpenAI-compatible provider speaks chat completions only — no prompt
+  templates, streaming, tool calls, or conversation history; per-execution
+  responses are single-shot and size-capped.
 - Job progress is polled by the renderer; push events are a V2 concern.
 - macOS packages are unsigned (testers must bypass Gatekeeper explicitly);
   signing, notarization, and auto-update are post-V1.
@@ -263,8 +281,9 @@ The request is persisted encrypted before dispatch for local auditability, but n
 provider call occurs until the outbound scanner accepts it. The scanner requires
 the exact artifact token set and rejects ProtectedValue plaintext, internal row
 identifiers, malformed tokens, unknown tokens, and missing restoration tokens.
-Failures persist only a stable encrypted code. V1 ships a deterministic local Mock
-provider; a future network provider must implement the same narrow port.
+Failures persist only a stable encrypted code. V1 ships two providers behind the
+same narrow port: the deterministic local Mock and an OpenAI-compatible network
+adapter that owns its bounded timeout, cancellation, and response-size ceiling.
 
 ## Key Architectural Decisions
 

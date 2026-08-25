@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { initializeRuntime, type AliasAiRuntime } from './runtime'
 import { runSelfTest } from './self-test'
+import { runProviderSelfTest } from './provider-self-test'
 import { runUiSelfTest } from './ui-self-test'
 import { createHandlerRegistry } from './ipc/handlers'
 import { registerIpcHandlers } from './ipc/register'
@@ -28,6 +29,20 @@ if (process.argv.includes('--self-test')) {
       app.exit(1)
     }
   })
+} else if (process.argv.includes('--provider-self-test')) {
+  // Network-provider acceptance mode: the full pipeline dispatched through the
+  // real OpenAI-compatible HTTP provider against an in-process loopback fake
+  // endpoint — no external network, account, or real API key involved.
+  void app.whenReady().then(async () => {
+    try {
+      const result = await runProviderSelfTest(app, safeStorage)
+      console.log(JSON.stringify({ status: 'PASSED', stages: result.stages }))
+      app.exit(0)
+    } catch (error) {
+      console.error(JSON.stringify({ status: 'FAILED', message: error instanceof Error ? error.message : 'unknown failure' }))
+      app.exit(1)
+    }
+  })
 } else if (process.argv.includes('--ui-self-test')) {
   // Real desktop acceptance mode: creates a BrowserWindow and drives the
   // production React -> preload -> IPC -> application stack with synthetic
@@ -48,48 +63,63 @@ if (process.argv.includes('--self-test')) {
     }
   })
 } else {
-  void app.whenReady().then(async () => {
-    let runtime: AliasAiRuntime
-    try {
-      // Keys and the database must exist before any renderer or IPC handler.
-      runtime = await initializeRuntime(app, safeStorage)
-    } catch (error) {
-      // Sanitized message: never surfaces paths, keys, or stack traces.
-      const message = error instanceof Error ? error.message : 'Unknown startup failure'
-      dialog.showErrorBox('AliasAI', message)
-      app.quit()
-      return
-    }
-
-    registerIpcHandlers(
-      createHandlerRegistry(runtime, {
-        pickPdf: async () => {
-          const result = await dialog.showOpenDialog({
-            properties: ['openFile'],
-            filters: [{ name: 'PDF documents', extensions: ['pdf'] }]
-          })
-          return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]!
-        },
-        copyText: (text) => clipboard.writeText(text),
-        saveText: async (suggestedName, text) => {
-          const result = await dialog.showSaveDialog({
-            defaultPath: suggestedName,
-            filters: [{ name: 'Text document', extensions: ['txt'] }]
-          })
-          if (result.canceled || result.filePath === undefined) return false
-          await writeFile(result.filePath, text, 'utf8')
-          return true
-        }
-      }),
-      ipcMain
-    )
-
-    createWindow()
-
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  // The desktop app is single-instance: provider-configuration mutations are
+  // serialized within one main process, so a second instance sharing the same
+  // userData (and its provider configuration file) must not run. Acceptance
+  // modes above use throwaway userData directories and skip the lock.
+  if (!app.requestSingleInstanceLock()) {
+    app.quit()
+  } else {
+    app.on('second-instance', () => {
+      const [window] = BrowserWindow.getAllWindows()
+      if (window !== undefined) {
+        if (window.isMinimized()) window.restore()
+        window.focus()
+      }
     })
-  })
+    void app.whenReady().then(async () => {
+      let runtime: AliasAiRuntime
+      try {
+        // Keys and the database must exist before any renderer or IPC handler.
+        runtime = await initializeRuntime(app, safeStorage)
+      } catch (error) {
+        // Sanitized message: never surfaces paths, keys, or stack traces.
+        const message = error instanceof Error ? error.message : 'Unknown startup failure'
+        dialog.showErrorBox('AliasAI', message)
+        app.quit()
+        return
+      }
+
+      registerIpcHandlers(
+        createHandlerRegistry(runtime, {
+          pickPdf: async () => {
+            const result = await dialog.showOpenDialog({
+              properties: ['openFile'],
+              filters: [{ name: 'PDF documents', extensions: ['pdf'] }]
+            })
+            return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]!
+          },
+          copyText: (text) => clipboard.writeText(text),
+          saveText: async (suggestedName, text) => {
+            const result = await dialog.showSaveDialog({
+              defaultPath: suggestedName,
+              filters: [{ name: 'Text document', extensions: ['txt'] }]
+            })
+            if (result.canceled || result.filePath === undefined) return false
+            await writeFile(result.filePath, text, 'utf8')
+            return true
+          }
+        }),
+        ipcMain
+      )
+
+      createWindow()
+
+      app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow()
+      })
+    })
+  }
 }
 
 function parseRendererUrl(value: string | undefined): URL | undefined {

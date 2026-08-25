@@ -6,7 +6,11 @@ import type {
   MatterSummaryDTO,
   SanitizedPreview
 } from '@aliasai/application'
+import type { AliasAiInvokeMap } from '../../../main/src/ipc/contract'
 import { invoke, UiError } from './client'
+
+/** Provider status as the renderer may see it: never contains the API key itself. */
+export type AiProviderStatus = AliasAiInvokeMap['aiProvider:getStatus']['response']
 
 export function useMatters(refreshKey = 0): {
   readonly matters: readonly MatterSummaryDTO[]
@@ -183,6 +187,33 @@ export function useSanitizedPreview(
   }, [documentId, refreshKey])
 
   return { preview, error }
+}
+
+/** Loads the non-sensitive provider configuration (key presence only). */
+export function useAiProviderStatus(refreshKey = 0): {
+  readonly status: AiProviderStatus | null
+  readonly error: UiError | null
+} {
+  const [status, setStatus] = useState<AiProviderStatus | null>(null)
+  const [error, setError] = useState<UiError | null>(null)
+
+  useEffect(() => {
+    setStatus(null)
+    setError(null)
+    let active = true
+    invoke('aiProvider:getStatus', {})
+      .then((result) => {
+        if (active) setStatus(result)
+      })
+      .catch((failure: unknown) => {
+        if (active) setError(failure instanceof UiError ? failure : null)
+      })
+    return () => {
+      active = false
+    }
+  }, [refreshKey])
+
+  return { status, error }
 }
 
 /**

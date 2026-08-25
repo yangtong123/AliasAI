@@ -6,10 +6,17 @@ import {
   foldDecimalDigits,
   normalizeProtectedValue
 } from '@aliasai/entity-resolution'
+import { MOCK_PROVIDER_ID } from './openai-compatible'
 
 /** The only value allowed to cross an AiProvider boundary in V1. */
 export interface AiProviderRequest {
   readonly content: string
+  /**
+   * Cooperative cancellation owned by the application service; a provider that
+   * supports it aborts its transport immediately. Purely a control signal —
+   * no data crosses it.
+   */
+  readonly signal?: AbortSignal
 }
 
 /** Provider output remains pseudonymized until the application rehydrates it locally. */
@@ -30,12 +37,13 @@ export type MockAiResponder = (content: string) => string | Promise<string>
  * same narrow contract as a future network provider but performs no I/O.
  */
 export class MockAiProvider implements AiProvider {
-  readonly id = 'mock-v1'
+  readonly id = MOCK_PROVIDER_ID
 
   constructor(private readonly respond: MockAiResponder = (content) => `Mock analysis:\n${content}`) {}
 
   async execute(request: AiProviderRequest): Promise<AiProviderResponse> {
     if (request.content.length === 0) throw new Error('AI provider content must not be empty')
+    if (request.signal?.aborted === true) throw new Error('AI provider request was cancelled')
     const content = await this.respond(request.content)
     if (typeof content !== 'string' || content.length === 0) {
       throw new Error('AI provider returned an invalid response')
@@ -460,3 +468,5 @@ export function assertSafeOutboundPayload(input: OutboundLeakScanInput): void {
   const findings = scanOutboundPayload(input)
   if (findings.length > 0) throw new AiLeakDetectedError(findings)
 }
+
+export * from './openai-compatible'

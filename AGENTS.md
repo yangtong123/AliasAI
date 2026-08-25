@@ -103,6 +103,7 @@ These rules are V1 architecture constraints. Do not silently violate or redefine
 - Tests and fixtures must use synthetic identities.
 - Never log decrypted ProtectedValue contents.
 - Never expose encryption keys through renderer IPC.
+- AI provider API keys are stored only in the main process, encrypted with Electron `safeStorage` in `userData/aliasai.ai-provider.json` — never in SQLite, logs, or audit events. The stored key is never returned to the renderer (status exposes only configured/not-configured); a newly typed key crosses IPC only in the explicit save/test request.
 - Electron renderer must not have direct access to filesystem, SQLite, child_process, or unrestricted Node.js APIs.
 - Use Electron preload/contextBridge with narrow APIs.
 - Schema changes require migrations.

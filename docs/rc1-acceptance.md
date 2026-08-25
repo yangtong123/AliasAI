@@ -1,9 +1,10 @@
 # AliasAI V1 RC1 acceptance guide
 
 This release candidate is for test users on macOS. It is intentionally local,
-single-user, unsigned, and uses a deterministic local Mock AI provider. A
-tester does not need the repository, Node.js, pnpm, Python, or a network AI
-account.
+single-user, and unsigned. The AI provider defaults to the deterministic
+offline Mock; a tester can additionally configure any OpenAI-compatible
+endpoint (own deployment or local model server) in Settings. The offline
+workflow needs no repository, Node.js, pnpm, Python, or a network AI account.
 
 ## Supported package
 
@@ -30,15 +31,25 @@ Use synthetic or disposable documents only during RC testing.
 5. Open Sanitized preview. Any unresolved/unsupported Mention must be listed
    as a blocker with a Review mention action. With no blockers, generate the
    preview and verify real protected values are absent.
-6. Run Mock AI. The sanitized response must retain aliases/tokens but contain
-   no protected plaintext. Enable the local RESTORE_ON_REQUEST option and
-   verify the restored response only appears locally.
-7. Copy or export the sanitized Document and AI response. Copy/export of the
+6. Run the AI analysis (Mock by default). The sanitized response must retain
+   aliases/tokens but contain no protected plaintext. Enable the local
+   RESTORE_ON_REQUEST option and verify the restored response only appears
+   locally. While an execution is in flight, a Cancel button must stop it; the
+   execution then shows as failed/cancelled without a partial result.
+7. (Optional, requires an endpoint) Open 设置 Settings, switch the provider to
+   OpenAI-compatible, enter the Base URL (must be HTTPS; loopback HTTP is
+   allowed for local model servers), model name, and API key, then use
+   测试连接 Test connection before saving. The key is stored encrypted by the
+   macOS keychain; the page only ever shows 已配置 (configured), never the key
+   itself. Saving returns to the Mock provider at any time, and 删除提供商配置
+   removes every stored provider settings including the key.
+8. Copy or export the sanitized Document and AI response. Copy/export of the
    restored response is intentionally allowed only after an explicit click;
    the warning means that sensitive plaintext is leaving AliasAI's encrypted
    store for the clipboard or selected text file.
-8. Quit and reopen. The last valid Matter and Document selection should be
-   restored; persisted results remain available.
+9. Quit and reopen. The last valid Matter and Document selection should be
+   restored; persisted results and the configured AI provider (including the
+   stored key) remain available.
 
 The desktop UI defaults to Simplified Chinese. Use the language selector in
 the upper-right corner to switch between 简体中文 and English; the choice must
@@ -75,16 +86,21 @@ pnpm --filter @aliasai/desktop build
 node apps/desktop/scripts/audit-package.mjs /path/to/AliasAI.app
 AliasAI.app/Contents/MacOS/AliasAI --self-test
 AliasAI.app/Contents/MacOS/AliasAI --ui-self-test
+AliasAI.app/Contents/MacOS/AliasAI --provider-self-test
 ```
 
-Packaging CI records a strict manifest before both acceptance runs and checks
+Packaging CI records a strict manifest before the acceptance runs and checks
 it afterward. Any added/removed file, content change, permission change,
 escaping symlink, source map, test fixture, key/database, or build-machine path
-fails the release.
+fails the release. The provider self-test exercises the real HTTP provider
+path against an in-process loopback endpoint only — it needs no network or
+account.
 
 ## Deliberate RC1 limitations
 
-- No real/network AI provider; Mock AI only.
+- The OpenAI-compatible provider covers chat completions only — no prompt
+  templates, streaming, tool calls, or conversation history; no provider
+  bundled by default (Mock is offline and remains the default selection).
 - Native text PDF parsing is bundled; PaddleOCR is not bundled.
 - Mixed pages use their native text layer and do not OCR image regions.
 - No NER, code signing/notarization, auto-update, cloud sync, collaboration,

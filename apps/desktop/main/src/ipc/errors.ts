@@ -7,7 +7,9 @@ import {
   ReviewQueryError,
   SanitizationError
 } from '@aliasai/application'
+import { OpenAiCompatibleProviderError } from '@aliasai/ai'
 import { PythonRuntimeError } from '../runtime'
+import { AiProviderConfigError } from '../ai-provider'
 import { KeyStoreError } from '../keys'
 import { IpcValidationError } from './validate'
 
@@ -29,6 +31,8 @@ function isCodedError(error: unknown): error is CodedError {
     error instanceof ReviewOperationError ||
     error instanceof KeyStoreError ||
     error instanceof PythonRuntimeError ||
+    error instanceof AiProviderConfigError ||
+    error instanceof OpenAiCompatibleProviderError ||
     error instanceof IpcValidationError
   )
 }

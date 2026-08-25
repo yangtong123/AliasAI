@@ -253,3 +253,46 @@ button.mention.selected {
   padding: 8px 16px;
   margin-top: 8px;
 }
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.provider-settings {
+  max-width: 640px;
+}
+
+.provider-settings header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.provider-choice {
+  border: 1px solid #263650;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 16px 0;
+}
+
+.provider-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.provider-form input {
+  width: 100%;
+  max-width: 420px;
+}
+
+.provider-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}

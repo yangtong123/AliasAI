@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { MockAiProvider } from '@aliasai/ai'
 import { generateUuidV7 } from '@aliasai/crypto'
 import {
   AiExecutionService,
@@ -34,6 +33,7 @@ import {
   openDatabase
 } from '@aliasai/database'
 import { PythonWorkerClient, PythonWorkerDocumentProcessor } from '@aliasai/python-bridge'
+import { AiProviderConfigStore, AiProviderManager } from './ai-provider'
 import { SafeStorageKeyStore, type SafeStorage } from './keys'
 
 /** The slice of Electron's app the runtime depends on; injectable for tests. */
@@ -56,6 +56,8 @@ export interface AliasAiServices {
   readonly reviewOperations: ReviewOperationService
   readonly preview: SanitizedPreviewService
   readonly ai: AiExecutionService
+  /** Configurable provider (Mock or OpenAI-compatible) behind the AI service. */
+  readonly aiProvider: AiProviderManager
 }
 
 export interface AliasAiRuntime {
@@ -90,6 +92,11 @@ export async function initializeRuntime(app: AppLike, safeStorage: SafeStorage):
     resolutionRepository,
     keys
   )
+  // The provider manager loads the persisted selection (Mock by default) and
+  // fails closed — instead of silently falling back to Mock — when a stored
+  // real-provider configuration cannot be used.
+  const aiProvider = new AiProviderManager(new AiProviderConfigStore(app.getPath('userData'), safeStorage))
+  await aiProvider.init()
   const packagedResourcesPath = app.isPackaged ? process.resourcesPath : undefined
   const documentWorker = resolveDocumentWorker(packagedResourcesPath)
   const services: AliasAiServices = {
@@ -129,7 +136,8 @@ export async function initializeRuntime(app: AppLike, safeStorage: SafeStorage):
       rehydration,
       keys
     ),
-    ai: new AiExecutionService(new AiExecutionRepository(db), rehydration, new MockAiProvider(), keys)
+    ai: new AiExecutionService(new AiExecutionRepository(db), rehydration, aiProvider, keys),
+    aiProvider
   }
 
   let closed = false

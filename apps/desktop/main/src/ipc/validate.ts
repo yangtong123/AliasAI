@@ -42,6 +42,19 @@ export function optionalBoolean(value: unknown, field: string, fallback: boolean
   return value
 }
 
+/**
+ * Reads an optional text field, trimmed; blank input is treated as absent so a
+ * settings form can omit a value (for example: keep the stored API key).
+ */
+export function optionalText(value: unknown, field: string, maxLength: number): string | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string' || value.length > maxLength) {
+    throw new IpcValidationError(field, `${field} must be text of at most ${maxLength} characters`)
+  }
+  const trimmed = value.trim()
+  return trimmed.length === 0 ? undefined : trimmed
+}
+
 function hasControlCharacter(value: string): boolean {
   return [...value].some((character) => {
     const code = character.charCodeAt(0)

@@ -1,5 +1,5 @@
 import type { DocumentSummaryDTO } from '@aliasai/application'
-import { IpcValidationError, optionalBoolean, requireEnum, requireId, requireText } from './validate'
+import { IpcValidationError, optionalBoolean, optionalText, requireEnum, requireId, requireText } from './validate'
 import { toIpcResult, type IpcResult } from './errors'
 import type { AliasAiChannel, AliasAiInvokeMap } from './contract'
 import type { AliasAiRuntime } from '../runtime'
@@ -193,6 +193,47 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
       toIpcResult(async () => {
         const result = loadAiResult(payload)
         return { saved: await host.saveText(result.suggestedName, result.text) }
+      }),
+    'ai:cancel': (payload) =>
+      toIpcResult(() => {
+        requireEmpty(payload)
+        return { cancelled: services.ai.cancelActive() }
+      }),
+    'aiProvider:getStatus': (payload) =>
+      toIpcResult(() => {
+        requireEmpty(payload)
+        return services.aiProvider.status()
+      }),
+    'aiProvider:save': (payload) =>
+      toIpcResult(async () => {
+        const provider = requireEnum(readField(payload, 'provider'), ['mock', 'openai-compatible'], 'provider')
+        if (provider === 'mock') {
+          await services.aiProvider.configureMock()
+          return services.aiProvider.status()
+        }
+        const baseUrl = requireText(readField(payload, 'baseUrl'), 'baseUrl', 2_048).trim()
+        const model = requireText(readField(payload, 'model'), 'model', 200).trim()
+        const apiKey = optionalText(readOptionalField(payload, 'apiKey'), 'apiKey', 4_096)
+        await services.aiProvider.configureOpenAi({ baseUrl, model, ...(apiKey === undefined ? {} : { apiKey }) })
+        return services.aiProvider.status()
+      }),
+    'aiProvider:clear': (payload) =>
+      toIpcResult(async () => {
+        requireEmpty(payload)
+        await services.aiProvider.clear()
+        return services.aiProvider.status()
+      }),
+    'aiProvider:testConnection': (payload) =>
+      toIpcResult(async () => {
+        const baseUrl = optionalText(readOptionalField(payload, 'baseUrl'), 'baseUrl', 2_048)
+        const model = optionalText(readOptionalField(payload, 'model'), 'model', 200)
+        const apiKey = optionalText(readOptionalField(payload, 'apiKey'), 'apiKey', 4_096)
+        const input = {
+          ...(baseUrl === undefined ? {} : { baseUrl }),
+          ...(model === undefined ? {} : { model }),
+          ...(apiKey === undefined ? {} : { apiKey })
+        }
+        return services.aiProvider.testConnection(input)
       })
   }
 }

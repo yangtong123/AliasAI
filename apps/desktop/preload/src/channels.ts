@@ -24,7 +24,12 @@ export const CHANNELS = [
   'ai:execute',
   'ai:latest',
   'ai:copyResult',
-  'ai:exportResult'
+  'ai:exportResult',
+  'ai:cancel',
+  'aiProvider:getStatus',
+  'aiProvider:save',
+  'aiProvider:clear',
+  'aiProvider:testConnection'
 ] as const
 
 export type Channel = (typeof CHANNELS)[number]

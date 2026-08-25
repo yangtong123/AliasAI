@@ -97,6 +97,8 @@ export function aiExecutionErrorContext(executionId: string): Buffer {
  * boundary.
  */
 export class AiExecutionService {
+  private readonly activeAborts = new Set<AbortController>()
+
   constructor(
     private readonly executions: AiExecutionStore,
     private readonly rehydration: LocalRehydrator,
@@ -148,13 +150,18 @@ export class AiExecutionService {
       requestCipher.fill(0)
     }
 
+    // Cancellation is cooperative and provider-scoped: aborting only affects
+    // the in-flight provider dispatch, and the execution still transitions
+    // through the same encrypted fail-closed path as any other failure.
+    const controller = new AbortController()
+    this.activeAborts.add(controller)
     let completed: AiExecutionRecord
     let sanitizedResponse: string
     try {
       this.verifyOutbound(content, source, executionId)
       let response: Awaited<ReturnType<AiProvider['execute']>>
       try {
-        response = await this.provider.execute({ content })
+        response = await this.provider.execute({ content, signal: controller.signal })
       } catch (error) {
         throw new AiExecutionError('AI_PROVIDER_FAILURE', 'AI provider request failed', {
           cause: error
@@ -170,11 +177,30 @@ export class AiExecutionService {
       sanitizedResponse = response.content
       completed = this.persistResponse(executionId, response.content)
     } catch (error) {
-      const failure = this.normalizeFailure(error)
+      let failure = this.normalizeFailure(error)
+      if (failure.code === 'AI_PROVIDER_FAILURE' && controller.signal.aborted) {
+        failure = new AiExecutionError('AI_CANCELLED', 'AI execution was cancelled', { cause: error })
+      }
       this.persistFailure(executionId, failure)
       throw failure
+    } finally {
+      this.activeAborts.delete(controller)
     }
     return this.toCompletedView(completed, sanitizedResponse, includeRestoreOnRequest)
+  }
+
+  /**
+   * Aborts every in-flight provider dispatch. Each aborted execution fails
+   * closed as AI_CANCELLED with the same encrypted, code-only error record as
+   * any other failure — no partial response is ever kept.
+   */
+  cancelActive(): number {
+    let cancelled = 0
+    for (const controller of this.activeAborts) {
+      controller.abort()
+      cancelled += 1
+    }
+    return cancelled
   }
 
   findLatest(sanitizedDocumentId: string, includeRestoreOnRequest = false): AiExecutionView | undefined {

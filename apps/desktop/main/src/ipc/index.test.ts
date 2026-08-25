@@ -185,6 +185,66 @@ describe('IPC handler registry', () => {
     })
   })
 
+  it('reports the AI provider status without ever containing a key', async () => {
+    const status = await registry['aiProvider:getStatus']({})
+    expect(status).toEqual({
+      ok: true,
+      data: { provider: 'mock', openai: null, configErrorCode: null }
+    })
+
+    const saved = await registry['aiProvider:save']({
+      provider: 'openai-compatible',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-synthetic',
+      apiKey: 'sk-synthetic-ipc-key'
+    })
+    expect(saved).toEqual({
+      ok: true,
+      data: {
+        provider: 'openai-compatible',
+        openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-synthetic', apiKeyConfigured: true },
+        configErrorCode: null
+      }
+    })
+    expect(JSON.stringify(saved)).not.toContain('sk-synthetic-ipc-key')
+
+    expect(await registry['aiProvider:clear']({})).toEqual({
+      ok: true,
+      data: { provider: 'mock', openai: null, configErrorCode: null }
+    })
+  })
+
+  it('validates provider save payloads and rejects an unsafe base URL', async () => {
+    expect(await registry['aiProvider:save']({ provider: 'other' })).toMatchObject({
+      ok: false,
+      error: { code: 'VALIDATION_ERROR' }
+    })
+    expect(
+      await registry['aiProvider:save']({ provider: 'openai-compatible', baseUrl: 'https://api.openai.com/v1' })
+    ).toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR' } })
+    const rejected = await registry['aiProvider:save']({
+      provider: 'openai-compatible',
+      baseUrl: 'http://api.openai.com/v1',
+      model: 'gpt-synthetic',
+      apiKey: 'sk-synthetic'
+    })
+    expect(rejected).toMatchObject({ ok: false, error: { code: 'PROVIDER_CONFIG_INVALID' } })
+    // The stored configuration is unchanged after a rejected save.
+    expect(await registry['aiProvider:getStatus']({})).toEqual({
+      ok: true,
+      data: { provider: 'mock', openai: null, configErrorCode: null }
+    })
+  })
+
+  it('requires a complete configuration before testing the connection', async () => {
+    const result = await registry['aiProvider:testConnection']({})
+    expect(result).toMatchObject({ ok: false, error: { code: 'AI_PROVIDER_NOT_CONFIGURED' } })
+  })
+
+  it('cancels zero executions when none are active', async () => {
+    expect(await registry['ai:cancel']({})).toEqual({ ok: true, data: { cancelled: 0 } })
+  })
+
   it('reloads a completed AI result in main before copying or exporting it', async () => {
     const getCompleted = vi.spyOn(runtime.services.ai, 'getCompleted').mockReturnValue({
       id: 'ai-1',

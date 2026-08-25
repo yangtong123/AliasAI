@@ -16,6 +16,7 @@
     "package:arm64": "pnpm run build && pnpm run prepare:python -- --arch arm64 && electron-builder --mac dir zip --arm64",
     "package:x64": "pnpm run build && pnpm run prepare:python -- --arch x64 && electron-builder --mac dir zip --x64",
     "self-test": "electron . --self-test",
+    "provider-self-test": "electron . --provider-self-test",
     "ui-self-test": "electron . --ui-self-test",
     "audit:package": "node scripts/audit-package.mjs"
   },

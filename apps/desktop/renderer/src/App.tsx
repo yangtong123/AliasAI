@@ -4,10 +4,11 @@ import { DocumentList } from './components/DocumentList'
 import { DocumentReviewPage } from './components/DocumentReviewPage'
 import { MatterList } from './components/MatterList'
 import { PipelineControls } from './components/PipelineControls'
+import { ProviderSettingsPage } from './components/ProviderSettingsPage'
 import { SanitizedPreviewView } from './components/SanitizedPreview'
 import { useI18n } from './i18n'
 
-type View = 'review' | 'preview'
+type View = 'review' | 'preview' | 'settings'
 const LAST_MATTER_KEY = 'aliasai.lastMatterId'
 const LAST_DOCUMENT_KEY = 'aliasai.lastDocumentId'
 
@@ -20,6 +21,10 @@ export function App() {
   const restoredDocumentIdRef = useRef<string | null>(localStorage.getItem(LAST_DOCUMENT_KEY))
   const [view, setView] = useState<View>('review')
   const [selectedMentionId, setSelectedMentionId] = useState<string | null>(null)
+  // Set by the provider settings page: while a save/test/clear is in flight the
+  // settings entry point is locked, because leaving would unmount the page and
+  // reset its operation mutex.
+  const [settingsBusy, setSettingsBusy] = useState(false)
   const { documents, loaded: documentsLoaded, error: documentListError } = useDocuments(matterId, refreshKey)
   const status = useDocumentStatus(documentId, refreshKey)
   const review = useDocumentReview(documentId, refreshKey)
@@ -79,13 +84,24 @@ export function App() {
           <p className="eyebrow">{t('app.tagline')}</p>
           <h1>AliasAI</h1>
         </div>
-        <label className="locale-switcher">
-          {t('language.label')}
-          <select value={locale} aria-label={t('language.label')} onChange={(event) => setLocale(event.target.value as typeof locale)}>
-            <option value="zh-CN">{t('language.chinese')}</option>
-            <option value="en">{t('language.english')}</option>
-          </select>
-        </label>
+        <div className="header-actions">
+          <button
+            type="button"
+            className={view === 'settings' ? 'selected' : undefined}
+            aria-pressed={view === 'settings'}
+            disabled={settingsBusy}
+            onClick={() => setView(view === 'settings' ? 'review' : 'settings')}
+          >
+            {t('nav.settings')}
+          </button>
+          <label className="locale-switcher">
+            {t('language.label')}
+            <select value={locale} aria-label={t('language.label')} onChange={(event) => setLocale(event.target.value as typeof locale)}>
+              <option value="zh-CN">{t('language.chinese')}</option>
+              <option value="en">{t('language.english')}</option>
+            </select>
+          </label>
+        </div>
       </header>
       <div className="layout">
         <aside>
@@ -104,57 +120,63 @@ export function App() {
           />
         </aside>
         <section className="content">
-          {(matterError ?? documentListError) !== null && (
-            <p className="error">{formatError((matterError ?? documentListError)!)}</p>
-          )}
-          {status.document !== null ? (
+          {view === 'settings' ? (
+            <ProviderSettingsPage onClose={() => setView('review')} onBusyChange={setSettingsBusy} />
+          ) : (
             <>
-              <header>
-                <h2>{status.document.originalName}</h2>
-                <nav>
-                  <button type="button" className={view === 'review' ? 'selected' : undefined} onClick={() => setView('review')}>
-                    {t('nav.review')}
-                  </button>
-                  <button type="button" className={view === 'preview' ? 'selected' : undefined} onClick={() => setView('preview')}>
-                    {t('nav.preview')}
-                  </button>
-                </nav>
-              </header>
-              <PipelineControls
-                documentId={status.document.id}
-                parseStatus={status.document.parseStatus}
-                jobs={status.jobs}
-                onChanged={refresh}
-              />
-              {view === 'review' ? (
-                review.review !== null ? (
-                  <DocumentReviewPage
-                    review={review.review}
-                    selectedMentionId={selectedMentionId}
-                    onSelectMention={setSelectedMentionId}
+              {(matterError ?? documentListError) !== null && (
+                <p className="error">{formatError((matterError ?? documentListError)!)}</p>
+              )}
+              {status.document !== null ? (
+                <>
+                  <header>
+                    <h2>{status.document.originalName}</h2>
+                    <nav>
+                      <button type="button" className={view === 'review' ? 'selected' : undefined} onClick={() => setView('review')}>
+                        {t('nav.review')}
+                      </button>
+                      <button type="button" className={view === 'preview' ? 'selected' : undefined} onClick={() => setView('preview')}>
+                        {t('nav.preview')}
+                      </button>
+                    </nav>
+                  </header>
+                  <PipelineControls
+                    documentId={status.document.id}
+                    parseStatus={status.document.parseStatus}
+                    jobs={status.jobs}
                     onChanged={refresh}
                   />
-                ) : (
-                  <p className="empty">{t('workspace.noReview')}</p>
-                )
+                  {view === 'review' ? (
+                    review.review !== null ? (
+                      <DocumentReviewPage
+                        review={review.review}
+                        selectedMentionId={selectedMentionId}
+                        onSelectMention={setSelectedMentionId}
+                        onChanged={refresh}
+                      />
+                    ) : (
+                      <p className="empty">{t('workspace.noReview')}</p>
+                    )
+                  ) : (
+                    <SanitizedPreviewView
+                      key={status.document.id}
+                      documentId={status.document.id}
+                      preview={preview.preview}
+                      onGenerated={refresh}
+                      onReviewMention={(mentionId) => {
+                        setSelectedMentionId(mentionId)
+                        setView('review')
+                      }}
+                    />
+                  )}
+                  {(review.error ?? preview.error) !== null && (
+                    <p className="error">{formatError((review.error ?? preview.error)!)}</p>
+                  )}
+                </>
               ) : (
-                <SanitizedPreviewView
-                  key={status.document.id}
-                  documentId={status.document.id}
-                  preview={preview.preview}
-                  onGenerated={refresh}
-                  onReviewMention={(mentionId) => {
-                    setSelectedMentionId(mentionId)
-                    setView('review')
-                  }}
-                />
-              )}
-              {(review.error ?? preview.error) !== null && (
-                <p className="error">{formatError((review.error ?? preview.error)!)}</p>
+                <p className="empty">{t('workspace.select')}</p>
               )}
             </>
-          ) : (
-            <p className="empty">{t('workspace.select')}</p>
           )}
         </section>
       </div>
