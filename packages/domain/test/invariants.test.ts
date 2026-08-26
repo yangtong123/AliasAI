@@ -11,6 +11,7 @@ import {
   assertSanitizationMapping,
   assertSanitizedBlock,
   assertSanitizedDocument,
+  assertWorkspaceEvent,
   assignMentionToEntity,
   canonicalizeEntityConstraint,
   canonicalizeEntityPair,
@@ -259,6 +260,78 @@ describe('domain invariants', () => {
 
   it('accepts the SANITIZING document parse status', () => {
     expect(() => assertDocument({ ...document, parseStatus: 'SANITIZING' })).not.toThrow()
+  })
+
+  it('accepts a Document without deletedAt and a valid deletion timestamp', () => {
+    expect(() => assertDocument(document)).not.toThrow()
+    expect(() => assertDocument({ ...document, deletedAt: document.createdAt })).not.toThrow()
+    expect(() => assertDocument({ ...document, deletedAt: document.updatedAt + 1 })).not.toThrow()
+  })
+
+  it('rejects negative, unsafe, or pre-creation deletion timestamps', () => {
+    expect(() => assertDocument({ ...document, deletedAt: -1 })).toThrow(
+      'document.deletedAt must be a non-negative safe integer'
+    )
+    expect(() => assertDocument({ ...document, deletedAt: 1.5 })).toThrow(DomainInvariantError)
+    expect(() => assertDocument({ ...document, deletedAt: Number.MAX_SAFE_INTEGER + 1 })).toThrow(
+      'document.deletedAt must be a non-negative safe integer'
+    )
+    expect(() => assertDocument({ ...document, deletedAt: document.createdAt - 1 })).toThrow(
+      'document.deletedAt must not precede document.createdAt'
+    )
+  })
+
+  it('rejects workspace events with an invalid target shape', () => {
+    expect(() =>
+      assertWorkspaceEvent({ id: 'event-1', matterId: 'matter-1', type: 'MATTER_TRASHED', actor: 'USER', createdAt: 1 })
+    ).not.toThrow()
+    expect(() =>
+      assertWorkspaceEvent({
+        id: 'event-1',
+        matterId: 'matter-1',
+        type: 'DOCUMENT_RESTORED',
+        documentId: 'document-1',
+        actor: 'USER',
+        createdAt: 1
+      })
+    ).not.toThrow()
+    // Matter events must not carry a documentId.
+    expect(() =>
+      assertWorkspaceEvent({
+        id: 'event-1',
+        matterId: 'matter-1',
+        documentId: 'document-1',
+        type: 'MATTER_TRASHED',
+        actor: 'USER',
+        createdAt: 1
+      })
+    ).toThrow('matter workspace events must not carry a documentId')
+    // Document events require a documentId.
+    expect(() =>
+      assertWorkspaceEvent({ id: 'event-1', matterId: 'matter-1', type: 'DOCUMENT_TRASHED', actor: 'USER', createdAt: 1 })
+    ).toThrow('document workspace events require a documentId')
+    // V1 events are always user-authored.
+    expect(() =>
+      assertWorkspaceEvent({
+        id: 'event-1',
+        matterId: 'matter-1',
+        type: 'MATTER_TRASHED',
+        actor: 'SYSTEM',
+        createdAt: 1
+      } as unknown as Parameters<typeof assertWorkspaceEvent>[0])
+    ).toThrow('workspace events are always user-authored in V1')
+    expect(() =>
+      assertWorkspaceEvent({
+        id: 'event-1',
+        matterId: 'matter-1',
+        type: 'UNKNOWN',
+        actor: 'USER',
+        createdAt: 1
+      } as unknown as Parameters<typeof assertWorkspaceEvent>[0])
+    ).toThrow('workspaceEvent.type is not supported')
+    expect(() =>
+      assertWorkspaceEvent({ id: '', matterId: 'matter-1', type: 'MATTER_TRASHED', actor: 'USER', createdAt: 1 })
+    ).toThrow('workspaceEvent.id must not be empty')
   })
 
   it('accepts a valid SanitizedDocument and rejects empty identifiers', () => {
