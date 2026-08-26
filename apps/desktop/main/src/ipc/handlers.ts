@@ -121,6 +121,14 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
         const documentId = requireId(readField(payload, 'documentId'), 'documentId')
         return services.lifecycle.restoreDocument(documentId)
       }),
+    'document:pickAndReplace': (payload) =>
+      toIpcResult(async () => {
+        const documentId = requireId(readField(payload, 'documentId'), 'documentId')
+        const filePath = await host.pickPdf()
+        if (filePath === null) return null
+        const replaced = await services.replacement.replaceFromPath(documentId, filePath)
+        return importedSummary(replaced.matterId, replaced.id)
+      }),
     'review:getDocument': (payload) =>
       toIpcResult(() => {
         const documentId = requireId(readField(payload, 'documentId'), 'documentId')

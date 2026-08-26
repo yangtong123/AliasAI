@@ -16,6 +16,7 @@ export const CHANNELS = [
   'document:resolve',
   'document:trash',
   'document:restore',
+  'document:pickAndReplace',
   'review:getDocument',
   'review:assign',
   'review:confirm',

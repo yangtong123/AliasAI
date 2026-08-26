@@ -87,7 +87,7 @@ describe('IPC handler registry', () => {
   let registry: HandlerRegistry
   const copyText = vi.fn()
   const saveText = vi.fn(async () => true)
-  const host = { pickPdf: async () => '/synthetic/path.pdf', copyText, saveText }
+  const host = { pickPdf: async (): Promise<string | null> => '/synthetic/path.pdf', copyText, saveText }
 
   beforeEach(async () => {
     copyText.mockReset()
@@ -154,6 +154,63 @@ describe('IPC handler registry', () => {
       data: { changed: true }
     })
     expect(restoreDocument).toHaveBeenCalledWith('document-trash-1')
+  })
+
+  it('replaces a document through the picker channel and returns its summary', async () => {
+    const replaceFromPath = vi
+      .spyOn(runtime.services.replacement, 'replaceFromPath')
+      .mockResolvedValue({
+        id: 'document-replacement',
+        matterId: 'matter-replacement',
+        fileHash: 'hash-replacement',
+        mimeType: 'application/pdf',
+        parseStatus: 'IMPORTED',
+        createdAt: 1,
+        updatedAt: 1,
+        supersedesDocumentId: 'document-old'
+      })
+    vi.spyOn(runtime.services.reviewQuery, 'listDocuments').mockReturnValue([
+      {
+        id: 'document-replacement',
+        matterId: 'matter-replacement',
+        originalName: 'replacement.pdf',
+        mimeType: 'application/pdf',
+        parseStatus: 'IMPORTED',
+        pageCount: 0,
+        createdAt: 1,
+        updatedAt: 1,
+        supersedesDocumentId: 'document-old'
+      }
+    ])
+
+    const result = await registry['document:pickAndReplace']({ documentId: 'document-old' })
+    expect(result).toMatchObject({
+      ok: true,
+      data: { id: 'document-replacement', supersedesDocumentId: 'document-old' }
+    })
+    expect(replaceFromPath).toHaveBeenCalledWith('document-old', '/synthetic/path.pdf')
+
+    // A cancelled picker is a no-op, and a busy document keeps its code.
+    const cancelledPicker = vi.spyOn(host, 'pickPdf').mockResolvedValue(null)
+    try {
+      expect(await registry['document:pickAndReplace']({ documentId: 'document-old' })).toEqual({ ok: true, data: null })
+    } finally {
+      cancelledPicker.mockRestore()
+    }
+    const busy = vi
+      .spyOn(runtime.services.replacement, 'replaceFromPath')
+      .mockRejectedValue(
+        new (await import('@aliasai/application')).DocumentReplacementError('DOCUMENT_BUSY', 'Document has running work')
+      )
+    expect(await registry['document:pickAndReplace']({ documentId: 'document-old' })).toEqual({
+      ok: false,
+      error: { code: 'DOCUMENT_BUSY', message: 'Document has running work' }
+    })
+    expect(await registry['document:pickAndReplace']({})).toMatchObject({
+      ok: false,
+      error: { code: 'VALIDATION_ERROR' }
+    })
+    busy.mockRestore()
   })
 
   it('validates lifecycle payloads and keeps application error codes in the envelope', async () => {

@@ -59,6 +59,7 @@ export interface AliasAiInvokeMap {
   }
   'document:trash': { request: { documentId: string }; response: { changed: boolean } }
   'document:restore': { request: { documentId: string }; response: { changed: boolean } }
+  'document:pickAndReplace': { request: { documentId: string }; response: DocumentSummaryDTO | null }
   'review:getDocument': { request: { documentId: string }; response: DocumentReviewDTO }
   'review:assign': { request: { mentionId: string; entityId: string }; response: MentionReviewDTO }
   'review:confirm': { request: { mentionId: string }; response: MentionReviewDTO }
@@ -150,6 +151,7 @@ export const ALIASAI_CHANNELS: readonly AliasAiChannel[] = [
   'document:resolve',
   'document:trash',
   'document:restore',
+  'document:pickAndReplace',
   'review:getDocument',
   'review:assign',
   'review:confirm',

@@ -2,6 +2,7 @@ import {
   AiExecutionError,
   DocumentImportError,
   DocumentProcessingError,
+  DocumentReplacementError,
   EntityResolutionError,
   PrivacyDetectionError,
   ReviewOperationError,
@@ -33,6 +34,7 @@ function isCodedError(error: unknown): error is CodedError {
     error instanceof ReviewOperationError ||
     error instanceof WorkspaceLifecycleError ||
     error instanceof DocumentImportError ||
+    error instanceof DocumentReplacementError ||
     error instanceof KeyStoreError ||
     error instanceof PythonRuntimeError ||
     error instanceof AiProviderConfigError ||
