@@ -174,6 +174,16 @@ Document sets `documents.deleted_at`. Both restore symmetrically.
   sanitization mappings, sanitized artifacts, and AI execution history are
   unchanged, so a restored (or still-trashed) artifact keeps rehydrating
   locally. Permanent deletion and retention are deliberately out of scope.
+- **One-step replacement**: `DocumentReplacementService` inspects and hashes
+  the chosen file before any database work, then
+  `WorkspaceLifecycleRepository.replaceDocument` performs the whole
+  replacement in one transaction — running-work and hash-collision checks,
+  trash the old row, insert the new active Document with
+  `supersedes_document_id` lineage, and append exactly one `DOCUMENT_REPLACED`
+  event linking both IDs. A failure rolls back and leaves the old Document
+  active; a cancelled picker never reaches the transaction. Nothing is copied
+  from the old Document, and Matter-scoped identity data keeps serving normal
+  resolution for the replacement.
 
 Known V1 limitations (deliberate):
 

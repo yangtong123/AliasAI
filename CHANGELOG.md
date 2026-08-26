@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- One-step Document replacement (用新 PDF 替换… / Replace with new PDF…):
+  picking a replacement file atomically trashes the old Document, creates the
+  replacement as a new active Document recording `supersedes_document_id`
+  lineage, and appends one audited `DOCUMENT_REPLACED` event linking both IDs.
+  Nothing is copied from the old Document (no mentions, review decisions,
+  jobs, sanitized artifacts, or AI executions), Matter-scoped identity data
+  keeps serving normal resolution for the replacement, the old artifact still
+  rehydrates locally from Trash, and any failure — running work, a file that
+  duplicates another active Document, an unreadable source, or a cancelled
+  picker — leaves the old Document exactly as it was. Replacement documents
+  show a lineage marker in the workspace list.
 - Recoverable trash for Matters and Documents: per-item trash buttons with
   confirmation on the workspace lists, a dedicated Trash view with restore
   actions, and idempotent append-only `workspace_events` audit. Trashing never

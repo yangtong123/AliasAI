@@ -42,11 +42,15 @@ Allowed status: `ACTIVE`, `ARCHIVED`, `DELETED`.
 | created_at | INTEGER | NOT NULL |
 | updated_at | INTEGER | NOT NULL |
 | deleted_at | INTEGER | nullable |
+| supersedes_document_id | TEXT | FK documents(id), nullable |
 
 `deleted_at` is the recoverable-trash timestamp: `NULL` for an active Document,
 set to the trash time for a trashed one. It never participates in the parsing
 state machine, and the trigger `documents_deleted_at_ordered_insert/update`
 rejects a value earlier than `created_at`.
+
+`supersedes_document_id` records one-step replacement lineage. Triggers reject
+self-references, cross-Matter lineage, and any later change of the value.
 
 Unique (active Documents only, partial index):
 `(matter_id, file_hash) WHERE deleted_at IS NULL` — a trashed Document never
@@ -56,6 +60,7 @@ Indexes:
 
 - `idx_documents_matter(matter_id)`
 - `idx_documents_matter_deleted(matter_id, deleted_at)`
+- `idx_documents_supersedes(supersedes_document_id)`
 
 ### document_pages
 
@@ -345,23 +350,27 @@ Indexes:
 
 ### workspace_events
 
-Append-only container lifecycle history (trash/restore). Updates and deletes
-are rejected by the `workspace_events_append_only_update/delete` triggers; a
-scope insert trigger requires a non-null `document_id` to reference a Document
-of the same Matter.
+Append-only container lifecycle history (trash/restore/replace). Updates and
+deletes are rejected by the `workspace_events_append_only_update/delete`
+triggers; a scope insert trigger requires a non-null `document_id` (and
+`superseded_document_id`) to reference a Document of the same Matter.
 
 | Column | Type | Constraints |
 |---|---|---|
 | id | TEXT | PK |
 | matter_id | TEXT | FK matters(id), NOT NULL |
 | document_id | TEXT | FK documents(id), nullable |
+| superseded_document_id | TEXT | FK documents(id), nullable |
 | event_type | TEXT | NOT NULL |
 | actor | TEXT | NOT NULL (`USER`) |
 | created_at | INTEGER | NOT NULL |
 
 Allowed event types: `MATTER_TRASHED`, `MATTER_RESTORED`, `DOCUMENT_TRASHED`,
-`DOCUMENT_RESTORED`. Matter events must have `document_id IS NULL`; Document
-events must have `document_id IS NOT NULL` (CHECK constraint).
+`DOCUMENT_RESTORED`, `DOCUMENT_REPLACED`. Matter events must have
+`document_id IS NULL`; Document events must have `document_id IS NOT NULL`
+(CHECK constraint). `DOCUMENT_REPLACED` must additionally carry
+`superseded_document_id` distinct from `document_id`, and no other event type
+may set it (CHECK constraint).
 
 Indexes:
 

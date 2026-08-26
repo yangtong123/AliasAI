@@ -62,7 +62,16 @@ Use synthetic or disposable documents only during RC testing.
    locally after restore. Restoring while an active copy with the same content
    exists must show an actionable conflict message. Trashing an item with a
    running pipeline stage or AI execution is rejected with a busy message.
-10. Quit and reopen. The last valid Matter and Document selection should be
+10. Replace in one step. On the Document list, 用新 PDF 替换… (Replace with new
+   PDF…) opens a confirmation explaining that the current Document moves to
+   trash and nothing it produced (mentions, review decisions, sanitized
+   results) is copied. Choosing the new PDF must leave the old Document in
+   回收站 (Trash), create an active replacement with a new identity and a
+   "Replaces an older document" marker, and record one audited replacement
+   event. The old Document's sanitized artifact must still rehydrate locally
+   from Trash. Replacing while a pipeline stage or AI execution is running is
+   rejected with a busy message, and a cancelled picker changes nothing.
+11. Quit and reopen. The last valid Matter and Document selection should be
    restored; persisted results and the configured AI provider (including the
    stored key) remain available.
 
@@ -80,10 +89,13 @@ then completes the entire acceptance workflow through the Chinese interface.
   retry from the displayed stage. Completed encrypted data is retained.
 - A changed source file is rejected before parse commit. Re-import the changed
   file to create a new Document identity.
-- Trashing a Document while a pipeline stage or AI execution is running fails
-  with `DOCUMENT_BUSY`; wait for it to finish, then retry. Nothing is partially
-  trashed. Same-name files with different content are never rejected for their
-  name.
+- Trashing or replacing a Document while a pipeline stage or AI execution is
+  running fails with `DOCUMENT_BUSY`; wait for it to finish, then retry.
+  Nothing is partially applied. Same-name files with different content are
+  never rejected for their name.
+- A replacement whose file content already exists as another active Document
+  fails with `RESTORE_CONFLICT`; trash that copy first or pick a different
+  file. The old Document stays active on any replacement failure.
 - Permanent physical deletion, trash retention, and key destruction are not
   supported in this release; trash is recoverable only.
 - Startup failures such as `PYTHON_RUNTIME_UNAVAILABLE` indicate an incomplete

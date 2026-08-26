@@ -82,7 +82,10 @@ interface Document {
 sanitization). Workspace lifecycle state is independent: a Document is trashed by
 setting `deletedAt` and restored by clearing it, and `parseStatus` never changes
 because of a lifecycle operation. When present, `deletedAt` is a non-negative
-safe integer that must not precede `createdAt`.
+safe integer that must not precede `createdAt`. `supersedesDocumentId`, when
+present, names the Document this one replaced in a one-step replacement; it
+never references itself, never crosses a Matter, is immutable, and the
+replacement always has a new ID with none of the old Document's pipeline data.
 
 Initial parsing state transitions are:
 
@@ -515,6 +518,10 @@ Matter:   ACTIVE -- trash --> DELETED -- restore --> ACTIVE
 
 Document: deletedAt = undefined -- trash --> deletedAt = timestamp
           deletedAt = timestamp -- restore --> deletedAt = undefined
+
+Replace:  active Document + new source file
+            -- replace --> old: deletedAt = timestamp
+                           new: new ID, active, supersedes = old ID
 ```
 
 Rules:
@@ -532,6 +539,15 @@ Rules:
   or a `RUNNING` AiExecution) cannot be trashed.
 - Trash and restore are idempotent: repeated no-op requests change no state and
   create no duplicate events.
+- One-step replacement is atomic: trash the old Document, create the
+  replacement, record `supersedesDocumentId`, and append one
+  `DOCUMENT_REPLACED` event linking both IDs — or nothing. File inspection and
+  hashing happen before the transaction, and a failed replacement leaves the
+  old Document active.
+- A replacement never copies Mentions, Entity assignments, processing jobs,
+  sanitized artifacts, or AI executions; existing Entity data stays
+  Matter-scoped and is proposed again through normal resolution.
+- Replacement is blocked while the old Document has running work.
 - Permanent physical deletion, retention, and key destruction are out of scope
   for V1 and are not supported.
 
@@ -545,6 +561,7 @@ type WorkspaceEventType =
   | 'MATTER_RESTORED'
   | 'DOCUMENT_TRASHED'
   | 'DOCUMENT_RESTORED'
+  | 'DOCUMENT_REPLACED'
 
 interface WorkspaceEvent {
   id: string
@@ -553,12 +570,16 @@ interface WorkspaceEvent {
   type: WorkspaceEventType
   actor: 'USER'
   createdAt: number
+  supersededDocumentId?: string
 }
 ```
 
 Rules:
 
 - Matter events do not carry `documentId`; Document events must carry it.
+- `DOCUMENT_REPLACED` events carry both `documentId` (the replacement) and
+  `supersededDocumentId` (the old Document), which must differ; no other event
+  type carries `supersededDocumentId`.
 - Workspace lifecycle events are always user-authored in V1.
 - Workspace events are separate from `ResolutionEventType`: resolution events
   explain identity decisions, workspace events explain container lifecycle

@@ -1,6 +1,6 @@
 # Workspace Trash and Document Replacement Development Plan
 
-Status: Milestone 1 implemented (2026-08-26)
+Status: Milestones 1 and 2 implemented (2026-08-26)
 Last updated: 2026-08-26
 
 ## Goal
@@ -511,12 +511,12 @@ Prefer the self-reference for V1 because replacement is linear and single-user.
 
 ### Milestone 2 acceptance criteria
 
-- [ ] Users can replace an active Document in one interaction.
-- [ ] The old Document appears in trash.
-- [ ] The new Document is active and has a new ID.
-- [ ] Version lineage is queryable and audited.
-- [ ] Replacement failure leaves the old Document unchanged.
-- [ ] No old Mention offsets or sanitized artifacts are attached to the new file.
+- [x] Users can replace an active Document in one interaction.
+- [x] The old Document appears in trash.
+- [x] The new Document is active and has a new ID.
+- [x] Version lineage is queryable and audited.
+- [x] Replacement failure leaves the old Document unchanged.
+- [x] No old Mention offsets or sanitized artifacts are attached to the new file.
 
 ## Delivery sequence
 
