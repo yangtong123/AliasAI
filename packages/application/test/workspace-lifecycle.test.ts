@@ -202,6 +202,26 @@ describe('workspace lifecycle application service', () => {
       expect((sqlite.prepare('SELECT COUNT(*) AS count FROM documents').get() as { count: number }).count).toBe(0)
     })
 
+    it('maps the transaction MATTER_UNAVAILABLE decision to MATTER_NOT_AVAILABLE', async () => {
+      // The Matter is live at the fast pre-check; the transaction decides it
+      // was trashed in between, exercising the dedicated mapping inside the
+      // try/catch instead of IMPORT_FAILED.
+      const matter = matters.create('Synthetic Matter')
+      const sourcePath = await writeSource('late.pdf', 'synthetic source')
+      const repo = new DocumentRepository(db)
+      vi.spyOn(repo, 'createInAvailableMatter').mockReturnValue({ status: 'MATTER_UNAVAILABLE' })
+      const racing = new DocumentImportService(repo, new MatterRepository(db), { persistenceKey: key }, () => timestamp++)
+
+      try {
+        await racing.importFromPath(matter.id, sourcePath)
+        expect.unreachable('import should fail')
+      } catch (error) {
+        expect(error).toBeInstanceOf(DocumentImportError)
+        expect((error as DocumentImportError).code).toBe('MATTER_NOT_AVAILABLE')
+      }
+      expect((sqlite.prepare('SELECT COUNT(*) AS count FROM documents').get() as { count: number }).count).toBe(0)
+    })
+
     it('fails with MATTER_NOT_AVAILABLE when importing into a deleted Matter', async () => {
       const matter = matters.create('Synthetic Matter')
       const sourcePath = await writeSource('synthetic.pdf', 'synthetic source')

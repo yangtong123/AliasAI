@@ -192,15 +192,23 @@ describe('workspace lifecycle guards', () => {
     it('rejects assign, confirm, create-and-assign, reject, split, and manual mention without side effects', () => {
       // Assign while the Document is still active so confirm and split reach
       // their repository transaction guards instead of failing earlier on an
-      // unassigned Mention.
+      // unassigned Mention. A second live Entity makes the post-trash assign a
+      // genuine reassignment, so its failure can only come from the lifecycle
+      // guard — not from a same-Entity no-op.
       operations.assignToEntity('mention-1', 'entity-1')
+      sqlite
+        .prepare(
+          `INSERT INTO entities (id, matter_id, entity_type, public_token, status, created_at, updated_at)
+           VALUES ('entity-2', 'matter-1', 'PERSON', '@P-0000000000000002', 'ACTIVE', 20, 20)`
+        )
+        .run()
       const eventsBefore = resolutionEventCount()
       expect(lifecycle.trashDocument('document-1')).toEqual({ changed: true })
       const mentionBefore = sqlite
         .prepare('SELECT entity_id, review_status FROM mentions WHERE id = ?')
         .get('mention-1') as { entity_id: string | null; review_status: string }
 
-      expect(() => operations.assignToEntity('mention-1', 'entity-1')).toThrow(expect.objectContaining({ code: 'ASSIGNMENT_FAILED' }))
+      expect(() => operations.assignToEntity('mention-1', 'entity-2')).toThrow(expect.objectContaining({ code: 'ASSIGNMENT_FAILED' }))
       expect(() => operations.confirmMention('mention-1')).toThrow(expect.objectContaining({ code: 'CONFIRMATION_FAILED' }))
       expect(() =>
         operations.createEntityAndAssign('mention-1', { primaryAlias: 'Party A', entityType: 'PERSON' })
@@ -221,7 +229,7 @@ describe('workspace lifecycle guards', () => {
       ).toEqual(mentionBefore)
       // No new entity or mention appeared either — in particular the split
       // created no half-built Entity.
-      expect((sqlite.prepare('SELECT COUNT(*) AS count FROM entities').get() as { count: number }).count).toBe(1)
+      expect((sqlite.prepare('SELECT COUNT(*) AS count FROM entities').get() as { count: number }).count).toBe(2)
       expect((sqlite.prepare('SELECT COUNT(*) AS count FROM mentions').get() as { count: number }).count).toBe(1)
     })
   })
