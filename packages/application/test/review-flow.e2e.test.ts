@@ -114,7 +114,7 @@ describe('review flow end to end', () => {
     const sourcePath = join(directory, 'synthetic.pdf')
     await writeFile(sourcePath, syntheticPdf('Holder 110101199003077774 synthetic@example.test.'))
     const matter = new MatterService(new MatterRepository(db), { persistenceKey }, now).create('Synthetic E2E Matter')
-    const imported = await new DocumentImportService(new DocumentRepository(db), { persistenceKey }, now).importFromPath(
+    const imported = await new DocumentImportService(new DocumentRepository(db), new MatterRepository(db), { persistenceKey }, now).importFromPath(
       matter.id,
       sourcePath
     )

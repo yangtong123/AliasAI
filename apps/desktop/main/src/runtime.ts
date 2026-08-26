@@ -16,6 +16,7 @@ import {
   ReviewQueryService,
   SanitizedPreviewService,
   StartupRecoveryService,
+  WorkspaceLifecycleService,
   type ApplicationKeys
 } from '@aliasai/application'
 import {
@@ -29,6 +30,7 @@ import {
   ReviewQueryRepository,
   SanitizationRepository,
   StartupRecoveryRepository,
+  WorkspaceLifecycleRepository,
   migrateDatabase,
   openDatabase
 } from '@aliasai/database'
@@ -58,6 +60,8 @@ export interface AliasAiServices {
   readonly ai: AiExecutionService
   /** Configurable provider (Mock or OpenAI-compatible) behind the AI service. */
   readonly aiProvider: AiProviderManager
+  /** Recoverable trash/restore for Matters and Documents. */
+  readonly lifecycle: WorkspaceLifecycleService
 }
 
 export interface AliasAiRuntime {
@@ -99,9 +103,10 @@ export async function initializeRuntime(app: AppLike, safeStorage: SafeStorage):
   await aiProvider.init()
   const packagedResourcesPath = app.isPackaged ? process.resourcesPath : undefined
   const documentWorker = resolveDocumentWorker(packagedResourcesPath)
+  const matterRepository = new MatterRepository(db)
   const services: AliasAiServices = {
-    matters: new MatterService(new MatterRepository(db), keys),
-    importDocs: new DocumentImportService(documents, keys),
+    matters: new MatterService(matterRepository, keys),
+    importDocs: new DocumentImportService(documents, matterRepository, keys),
     processing: new DocumentProcessingService(
       documents,
       new PythonWorkerDocumentProcessor(
@@ -137,7 +142,13 @@ export async function initializeRuntime(app: AppLike, safeStorage: SafeStorage):
       keys
     ),
     ai: new AiExecutionService(new AiExecutionRepository(db), rehydration, aiProvider, keys),
-    aiProvider
+    aiProvider,
+    lifecycle: new WorkspaceLifecycleService(
+      new WorkspaceLifecycleRepository(db),
+      documents,
+      matterRepository,
+      keys
+    )
   }
 
   let closed = false

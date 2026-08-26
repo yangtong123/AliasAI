@@ -47,6 +47,7 @@ describe('application use cases', () => {
 
     const document = await new DocumentImportService(
       new DocumentRepository(db),
+      new MatterRepository(db),
       { persistenceKey: key },
       () => 1_725_000_000_001
     ).importFromPath(matter.id, sourcePath)
@@ -70,7 +71,7 @@ describe('application use cases', () => {
     const sourcePath = join(directory, 'duplicate.pdf')
     await writeFile(sourcePath, 'synthetic duplicate source')
     let timestamp = 1_725_000_000_001
-    const imports = new DocumentImportService(new DocumentRepository(db), { persistenceKey: key }, () => timestamp++)
+    const imports = new DocumentImportService(new DocumentRepository(db), new MatterRepository(db), { persistenceKey: key }, () => timestamp++)
 
     const first = await imports.importFromPath(matter.id, sourcePath)
     const second = await imports.importFromPath(matter.id, sourcePath)

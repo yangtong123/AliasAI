@@ -601,7 +601,7 @@ describe('PseudonymizationService and RehydrationService', () => {
     const holder = seedEntity(matterId, 'PERSON', 'Holder One')
     linkEntityProtectedValue(matterId, holder.id, seedProtectedValue(matterId, 'ID_CARD', 'ID_CARD', '110101199003077774'))
 
-    const imported = await new DocumentImportService(documents, { persistenceKey }, now).importFromPath(matterId, sourcePath)
+    const imported = await new DocumentImportService(documents, new MatterRepository(db), { persistenceKey }, now).importFromPath(matterId, sourcePath)
     const virtualEnvironmentPython = resolve(process.cwd(), '.venv/bin/python')
     const processor = new PythonWorkerDocumentProcessor(
       'NATIVE_PDF',

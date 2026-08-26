@@ -297,7 +297,7 @@ describe('PrivacyDetectionService', () => {
     directories.push(directory)
     const sourcePath = join(directory, 'synthetic.pdf')
     await writeFile(sourcePath, syntheticPdf(text))
-    const imported = await new DocumentImportService(documents, { persistenceKey: key }, now).importFromPath(
+    const imported = await new DocumentImportService(documents, new MatterRepository(db), { persistenceKey: key }, now).importFromPath(
       matter.id,
       sourcePath
     )

@@ -1029,7 +1029,7 @@ describe('EntityResolutionService', () => {
     directories.push(directory)
     const sourcePath = join(directory, 'synthetic.pdf')
     await writeFile(sourcePath, syntheticPdf(`Holder ${idNumber} signed`))
-    const imported = await new DocumentImportService(documents, { persistenceKey }, now).importFromPath(matterId, sourcePath)
+    const imported = await new DocumentImportService(documents, new MatterRepository(db), { persistenceKey }, now).importFromPath(matterId, sourcePath)
     const virtualEnvironmentPython = resolve(process.cwd(), '.venv/bin/python')
     const processor = new PythonWorkerDocumentProcessor(
       'NATIVE_PDF',
@@ -1061,7 +1061,7 @@ describe('EntityResolutionService', () => {
     directories.push(directory)
     const sourcePath = join(directory, 'contract.pdf')
     await writeFile(sourcePath, syntheticChinesePdf(contractLine))
-    const imported = await new DocumentImportService(documents, { persistenceKey }, now).importFromPath(matterId, sourcePath)
+    const imported = await new DocumentImportService(documents, new MatterRepository(db), { persistenceKey }, now).importFromPath(matterId, sourcePath)
     const virtualEnvironmentPython = resolve(process.cwd(), '.venv/bin/python')
     const processor = new PythonWorkerDocumentProcessor(
       'NATIVE_PDF',

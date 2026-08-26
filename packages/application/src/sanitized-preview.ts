@@ -60,9 +60,11 @@ export class SanitizedPreviewService {
   ) {}
 
   getPreview(documentId: string): SanitizedPreview {
-    const document = this.documents.findById(documentId)
+    // Preview is a user-facing read path: trashed Documents and deleted Matters
+    // are not available. Historical artifact access uses other repositories.
+    const document = this.documents.findAvailableById(documentId)
     if (document === undefined) {
-      throw new Error('Document was not found')
+      throw new SanitizationError('SANITIZED_DOCUMENT_NOT_AVAILABLE', 'Document is not available')
     }
     if (document.parseStatus === 'SANITIZED') {
       const completed = this.sanitization.findCompleted(documentId)

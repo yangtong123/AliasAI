@@ -137,7 +137,7 @@ describe('DocumentProcessingService', () => {
     temporaryDirectories.push(directory)
     const sourcePath = join(directory, 'synthetic.pdf')
     await writeFile(sourcePath, contents)
-    const document = await new DocumentImportService(documents, { persistenceKey: key }, now).importFromPath(
+    const document = await new DocumentImportService(documents, new MatterRepository(db), { persistenceKey: key }, now).importFromPath(
       matter.id,
       sourcePath
     )
