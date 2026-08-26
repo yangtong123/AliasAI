@@ -60,6 +60,21 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
         if (summary === undefined) throw new Error('created matter summary was not found')
         return summary
       }),
+    'matter:trash': (payload) =>
+      toIpcResult(() => {
+        const matterId = requireId(readField(payload, 'matterId'), 'matterId')
+        return services.lifecycle.trashMatter(matterId)
+      }),
+    'matter:restore': (payload) =>
+      toIpcResult(() => {
+        const matterId = requireId(readField(payload, 'matterId'), 'matterId')
+        return services.lifecycle.restoreMatter(matterId)
+      }),
+    'trash:list': (payload) =>
+      toIpcResult(() => {
+        requireEmpty(payload)
+        return services.lifecycle.listTrash()
+      }),
     'document:pickAndImport': (payload) =>
       toIpcResult(async () => {
         const matterId = requireId(readField(payload, 'matterId'), 'matterId')
@@ -95,6 +110,16 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
         const documentId = requireId(readField(payload, 'documentId'), 'documentId')
         await services.resolution.resolve(documentId)
         return documentStatus(documentId)
+      }),
+    'document:trash': (payload) =>
+      toIpcResult(() => {
+        const documentId = requireId(readField(payload, 'documentId'), 'documentId')
+        return services.lifecycle.trashDocument(documentId)
+      }),
+    'document:restore': (payload) =>
+      toIpcResult(() => {
+        const documentId = requireId(readField(payload, 'documentId'), 'documentId')
+        return services.lifecycle.restoreDocument(documentId)
       }),
     'review:getDocument': (payload) =>
       toIpcResult(() => {

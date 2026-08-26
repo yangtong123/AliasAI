@@ -8,7 +8,8 @@ import type {
   MentionReviewDTO,
   EntitySummaryDTO,
   SanitizedPreview,
-  RehydrationResult
+  RehydrationResult,
+  WorkspaceTrashDTO
 } from '@aliasai/application'
 import type { EntityConstraintType, EntityType, MentionType } from '@aliasai/domain'
 import type { AiProviderStatus } from '../ai-provider'
@@ -35,6 +36,9 @@ export type AiProviderSaveRequest =
 export interface AliasAiInvokeMap {
   'matter:list': { request: Record<string, never>; response: readonly MatterSummaryDTO[] }
   'matter:create': { request: { name: string }; response: MatterSummaryDTO }
+  'matter:trash': { request: { matterId: string }; response: { changed: boolean } }
+  'matter:restore': { request: { matterId: string }; response: { changed: boolean } }
+  'trash:list': { request: Record<string, never>; response: WorkspaceTrashDTO }
   'document:pickAndImport': { request: { matterId: string }; response: DocumentSummaryDTO | null }
   'document:list': { request: { matterId: string }; response: readonly DocumentSummaryDTO[] }
   'document:get': {
@@ -53,6 +57,8 @@ export interface AliasAiInvokeMap {
     request: { documentId: string }
     response: { document: DocumentSummaryDTO; jobs: readonly JobSummaryDTO[] }
   }
+  'document:trash': { request: { documentId: string }; response: { changed: boolean } }
+  'document:restore': { request: { documentId: string }; response: { changed: boolean } }
   'review:getDocument': { request: { documentId: string }; response: DocumentReviewDTO }
   'review:assign': { request: { mentionId: string; entityId: string }; response: MentionReviewDTO }
   'review:confirm': { request: { mentionId: string }; response: MentionReviewDTO }
@@ -133,12 +139,17 @@ export type AliasAiChannel = keyof AliasAiInvokeMap & string
 export const ALIASAI_CHANNELS: readonly AliasAiChannel[] = [
   'matter:list',
   'matter:create',
+  'matter:trash',
+  'matter:restore',
+  'trash:list',
   'document:pickAndImport',
   'document:list',
   'document:get',
   'document:process',
   'document:detect',
   'document:resolve',
+  'document:trash',
+  'document:restore',
   'review:getDocument',
   'review:assign',
   'review:confirm',

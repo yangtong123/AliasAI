@@ -1,11 +1,13 @@
 import {
   AiExecutionError,
+  DocumentImportError,
   DocumentProcessingError,
   EntityResolutionError,
   PrivacyDetectionError,
   ReviewOperationError,
   ReviewQueryError,
-  SanitizationError
+  SanitizationError,
+  WorkspaceLifecycleError
 } from '@aliasai/application'
 import { OpenAiCompatibleProviderError } from '@aliasai/ai'
 import { PythonRuntimeError } from '../runtime'
@@ -29,6 +31,8 @@ function isCodedError(error: unknown): error is CodedError {
     error instanceof SanitizationError ||
     error instanceof ReviewQueryError ||
     error instanceof ReviewOperationError ||
+    error instanceof WorkspaceLifecycleError ||
+    error instanceof DocumentImportError ||
     error instanceof KeyStoreError ||
     error instanceof PythonRuntimeError ||
     error instanceof AiProviderConfigError ||

@@ -121,6 +121,58 @@ describe('IPC handler registry', () => {
     expect(listed.ok && listed.data.map((matter) => matter.name)).toContain('Synthetic IPC Matter')
   })
 
+  it('trashes and restores a Matter through the lifecycle channels', async () => {
+    const created = await registry['matter:create']({ name: 'Synthetic Trash Matter' })
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+
+    expect(await registry['matter:trash']({ matterId: created.data.id })).toEqual({ ok: true, data: { changed: true } })
+    const listedWhileTrashed = await registry['matter:list']({})
+    expect(listedWhileTrashed.ok && listedWhileTrashed.data).toHaveLength(0)
+    const trash = await registry['trash:list']({})
+    expect(trash.ok && trash.data.matters.map((matter) => matter.name)).toEqual(['Synthetic Trash Matter'])
+    expect(JSON.stringify(trash)).not.toContain('cipher')
+
+    expect(await registry['matter:restore']({ matterId: created.data.id })).toEqual({ ok: true, data: { changed: true } })
+    const restored = await registry['matter:list']({})
+    expect(restored.ok && restored.data.map((matter) => matter.id)).toContain(created.data.id)
+    const emptied = await registry['trash:list']({})
+    expect(emptied.ok && emptied.data.matters).toHaveLength(0)
+  })
+
+  it('trashes and restores a Document through the lifecycle channels', async () => {
+    const trashDocument = vi.spyOn(runtime.services.lifecycle, 'trashDocument').mockReturnValue({ changed: true })
+    const restoreDocument = vi.spyOn(runtime.services.lifecycle, 'restoreDocument').mockReturnValue({ changed: true })
+
+    expect(await registry['document:trash']({ documentId: 'document-trash-1' })).toEqual({
+      ok: true,
+      data: { changed: true }
+    })
+    expect(trashDocument).toHaveBeenCalledWith('document-trash-1')
+    expect(await registry['document:restore']({ documentId: 'document-trash-1' })).toEqual({
+      ok: true,
+      data: { changed: true }
+    })
+    expect(restoreDocument).toHaveBeenCalledWith('document-trash-1')
+  })
+
+  it('validates lifecycle payloads and keeps application error codes in the envelope', async () => {
+    expect(await registry['matter:trash']({})).toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR' } })
+    expect(await registry['matter:restore']({ matterId: '' })).toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR' } })
+    expect(await registry['document:trash']({ documentId: 42 })).toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR' } })
+    expect(await registry['document:restore']({ extra: 'field' })).toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR' } })
+    expect(await registry['trash:list']({ unexpected: true })).toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR' } })
+
+    expect(await registry['matter:trash']({ matterId: 'missing-matter' })).toEqual({
+      ok: false,
+      error: { code: 'MATTER_NOT_AVAILABLE', message: 'Matter is not available' }
+    })
+    expect(await registry['document:trash']({ documentId: 'missing-document' })).toEqual({
+      ok: false,
+      error: { code: 'DOCUMENT_NOT_AVAILABLE', message: 'Document is not available' }
+    })
+  })
+
   it('keeps the selected filesystem path in main while importing', async () => {
     const matter = await registry['matter:create']({ name: 'Synthetic Import Matter' })
     expect(matter.ok).toBe(true)
