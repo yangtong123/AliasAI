@@ -19,6 +19,7 @@ Core objects:
 - ResolutionEvidence
 - EntityConstraint
 - ResolutionEvent
+- WorkspaceEvent
 - ProcessingJob
 - AiExecution
 
@@ -32,6 +33,7 @@ Rules:
 - Every Entity belongs to one Matter.
 - No Entity is globally shared across Matters.
 - Tokens/fingerprints are Matter-scoped.
+- A Matter in the trash keeps `status = 'DELETED'`; its child rows are never rewritten.
 
 Suggested fields:
 
@@ -72,8 +74,15 @@ interface Document {
   parseStatus: DocumentParseStatus
   createdAt: number
   updatedAt: number
+  deletedAt?: number
 }
 ```
+
+`DocumentParseStatus` describes processing only (parsing, detection, resolution,
+sanitization). Workspace lifecycle state is independent: a Document is trashed by
+setting `deletedAt` and restored by clearing it, and `parseStatus` never changes
+because of a lifecycle operation. When present, `deletedAt` is a non-negative
+safe integer that must not precede `createdAt`.
 
 Initial parsing state transitions are:
 
@@ -492,6 +501,68 @@ interface ResolutionEvent {
 ```
 
 The event payload is persisted encrypted by infrastructure.
+
+## Workspace Lifecycle
+
+Recoverable deletion for Matters and Documents. "Delete" in the user interface
+means move to trash; nothing is physically removed, and Entity IDs, Public
+Tokens, ProtectedValues, sanitization mappings, sanitized artifacts, and AI
+execution history are never altered by a lifecycle operation.
+
+```text
+Matter:   ACTIVE -- trash --> DELETED -- restore --> ACTIVE
+          ARCHIVED -- trash --> DELETED -- restore --> ACTIVE
+
+Document: deletedAt = undefined -- trash --> deletedAt = timestamp
+          deletedAt = timestamp -- restore --> deletedAt = undefined
+```
+
+Rules:
+
+- Trashing a Matter hides the Matter and all of its contents from the normal
+  workspace without changing any child row.
+- Restoring a Matter makes its existing contents visible again.
+- A Document trashed before its Matter was trashed remains trashed after the
+  Matter is restored.
+- An active Document with the same `(matterId, fileHash)` is reused on import;
+  a matching Document that exists only in trash does not block a new import.
+- Restoring a Document fails when another active Document in the Matter already
+  has the same file hash.
+- A Matter or Document with running work (a `PENDING`/`RUNNING` ProcessingJob
+  or a `RUNNING` AiExecution) cannot be trashed.
+- Trash and restore are idempotent: repeated no-op requests change no state and
+  create no duplicate events.
+- Permanent physical deletion, retention, and key destruction are out of scope
+  for V1 and are not supported.
+
+### WorkspaceEvent
+
+Append-only history of container lifecycle changes.
+
+```ts
+type WorkspaceEventType =
+  | 'MATTER_TRASHED'
+  | 'MATTER_RESTORED'
+  | 'DOCUMENT_TRASHED'
+  | 'DOCUMENT_RESTORED'
+
+interface WorkspaceEvent {
+  id: string
+  matterId: string
+  documentId?: string
+  type: WorkspaceEventType
+  actor: 'USER'
+  createdAt: number
+}
+```
+
+Rules:
+
+- Matter events do not carry `documentId`; Document events must carry it.
+- Workspace lifecycle events are always user-authored in V1.
+- Workspace events are separate from `ResolutionEventType`: resolution events
+  explain identity decisions, workspace events explain container lifecycle
+  changes.
 
 ## ProcessingJob
 
