@@ -154,6 +154,7 @@ export function App() {
             onSelect={onSelectDocument}
             onChanged={refresh}
             onTrashed={onDocumentTrashed}
+            onReplaced={onDocumentTrashed}
           />
         </aside>
         <section className="content">

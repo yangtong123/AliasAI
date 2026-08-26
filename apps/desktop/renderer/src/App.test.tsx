@@ -256,6 +256,62 @@ describe('App trash flows', () => {
     expect(screen.getByRole('button', { name: 'Matter One' })).toBeDefined()
   })
 
+  it('replaces a document after confirmation and clears the old selection', async () => {
+    invoke.mockImplementation((channel: string, payload: Record<string, string>) => {
+      if (channel === 'matter:list') return Promise.resolve({ ok: true, data: [matterOne] })
+      if (channel === 'document:list') return Promise.resolve({ ok: true, data: [documentOne] })
+      if (channel === 'document:get') return Promise.resolve({ ok: true, data: { document: documentOne, jobs: [] } })
+      if (channel === 'trash:list') return Promise.resolve({ ok: true, data: { matters: [], documents: [] } })
+      if (channel === 'document:pickAndReplace') {
+        return Promise.resolve({
+          ok: true,
+          data: { ...documentOne, id: 'document-replacement', supersedesDocumentId: 'document-1' }
+        })
+      }
+      void payload
+      return Promise.resolve({ ok: true, data: null })
+    })
+    const user = userEvent.setup()
+    renderInEnglish(<App />)
+    await user.click(await screen.findByRole('button', { name: 'Matter One' }))
+    await user.click(await screen.findByRole('button', { name: /^synthetic\.pdf/ }))
+    expect(await screen.findByRole('heading', { name: 'synthetic.pdf' })).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Replace with new PDF…: synthetic.pdf' }))
+    expect(screen.getByText(/Pick a new PDF to take the place of this document/)).toBeDefined()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'document:pickAndReplace')).toHaveLength(0)
+
+    await user.click(screen.getByRole('button', { name: 'Replace with new PDF…: synthetic.pdf' }))
+    await user.click(screen.getByRole('button', { name: 'Choose new PDF…' }))
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('document:pickAndReplace', { documentId: 'document-1' })
+    })
+    // The replaced (now trashed) Document no longer holds the selection.
+    expect(await screen.findByText('Select a matter and document')).toBeDefined()
+    expect(localStorage.getItem('aliasai.lastDocumentId')).toBeNull()
+  })
+
+  it('marks a replacement document with its lineage', async () => {
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'matter:list') return Promise.resolve({ ok: true, data: [matterOne] })
+      if (channel === 'document:list') {
+        return Promise.resolve({
+          ok: true,
+          data: [{ ...documentOne, supersedesDocumentId: 'document-old' }]
+        })
+      }
+      if (channel === 'trash:list') return Promise.resolve({ ok: true, data: { matters: [], documents: [] } })
+      return Promise.resolve({ ok: true, data: null })
+    })
+    const user = userEvent.setup()
+    renderInEnglish(<App />)
+
+    await user.click(await screen.findByRole('button', { name: 'Matter One' }))
+    expect(await screen.findByText('Replaces an older document')).toBeDefined()
+  })
+
   it('opens the trash view from the header and restores an item', async () => {
     invoke.mockImplementation((channel: string, payload: Record<string, string>) => {
       if (channel === 'matter:list') return Promise.resolve({ ok: true, data: [] })

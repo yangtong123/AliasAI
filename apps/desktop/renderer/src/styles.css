@@ -362,3 +362,14 @@ button.danger {
   color: #8ba6c9;
   font-size: 0.85rem;
 }
+
+.item-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.badge.lineage {
+  border-color: #3f8f6b;
+  color: #7fd6a8;
+}
