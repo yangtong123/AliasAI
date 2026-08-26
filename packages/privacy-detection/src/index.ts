@@ -30,11 +30,39 @@ export interface PrivacyDetector {
 export interface PrivacyDetectionRule {
   readonly type: MentionType
   readonly expression: RegExp
+  /** Optional capture containing only the sensitive value; the full match may include a field label. */
+  readonly captureGroup?: number
   readonly strength?: MentionStrength
   readonly confidence?: number
 }
 
 const defaultRules: readonly PrivacyDetectionRule[] = [
+  {
+    type: 'PERSON',
+    expression:
+      /(?:授权代表|法定代表人|委托代理人|代理人|联系人|经办人|负责人|姓名)\s*[：:]\s*([\p{Script=Han}·]{2,8})(?=\s|[，,；;。]|身份证|手机|电话|邮箱|$)/gu,
+    captureGroup: 1,
+    confidence: 0.98
+  },
+  {
+    type: 'ORGANIZATION',
+    expression:
+      /(?<![\p{Script=Han}A-Z0-9（）()·])[\p{Script=Han}A-Z0-9（）()·]{2,60}(?:有限责任公司|股份有限公司|有限公司|律师事务所)/giu,
+    confidence: 0.98
+  },
+  {
+    type: 'BANK_ACCOUNT',
+    expression: /(?:银行账号|银行账户|银行卡号|开户账号|账号)\s*[：:]\s*([0-9][0-9 -]{10,32}[0-9])/g,
+    captureGroup: 1,
+    confidence: 0.99
+  },
+  {
+    type: 'ADDRESS',
+    expression:
+      /(?:联系地址|通讯地址|住所地|地址)\s*[：:]\s*([^\n；;。]{4,100}?)(?=(?:[，,]\s*|\s+)(?:手机号码|联系电话|手机号|手机|电话|电子邮箱|电子邮件|邮箱|邮件|身份证号码|身份证号|证件号码|证件号|银行账号|银行账户|银行卡号|开户账号|账号)\s*[：:]|[\n；;。]|$)/gu,
+    captureGroup: 1,
+    confidence: 0.97
+  },
   { type: 'EMAIL', expression: /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi },
   { type: 'ID_CARD', expression: /\b\d{17}[\dXx]\b/g },
   { type: 'PHONE', expression: /(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)/g }
@@ -62,6 +90,9 @@ export class RuleBasedPrivacyDetector implements PrivacyDetector {
       if (rule.confidence !== undefined && (!Number.isFinite(rule.confidence) || rule.confidence < 0 || rule.confidence > 1)) {
         throw new Error('Privacy detection rule confidence must be between 0 and 1')
       }
+      if (rule.captureGroup !== undefined && (!Number.isSafeInteger(rule.captureGroup) || rule.captureGroup < 1)) {
+        throw new Error('Privacy detection rule captureGroup must be a positive integer')
+      }
       if (!MENTION_TYPES.has(rule.type)) throw new Error('Privacy detection rule type is not supported')
       if (rule.strength !== undefined && !MENTION_STRENGTHS.has(rule.strength)) {
         throw new Error('Privacy detection rule strength is not supported')
@@ -74,12 +105,20 @@ export class RuleBasedPrivacyDetector implements PrivacyDetector {
     assertBlockBoundary(block)
     const ranked: RankedProposal[] = []
     for (const [ruleIndex, rule] of this.#rules.entries()) {
-      const flags = rule.expression.flags.includes('g') ? rule.expression.flags : `${rule.expression.flags}g`
+      const globalFlags = rule.expression.flags.includes('g') ? rule.expression.flags : `${rule.expression.flags}g`
+      // The indices flag makes every capture group report its exact absolute
+      // span, so a value that also occurs inside the label prefix can never
+      // shift the proposal offsets.
+      const flags = globalFlags.includes('d') ? globalFlags : `${globalFlags}d`
       const expression = new RegExp(rule.expression.source, flags)
       for (const match of block.text.matchAll(expression)) {
-        const startOffset = match.index
-        const matchedLength = match[0].length
-        if (startOffset === undefined || matchedLength === 0) continue
+        const group = rule.captureGroup ?? 0
+        const captured = match[group]
+        const range = match.indices?.[group]
+        if (captured === undefined || range === undefined) continue
+        const startOffset = range[0]!
+        const matchedLength = range[1]! - startOffset
+        if (matchedLength === 0) continue
         ranked.push({
           ruleIndex,
           proposal: {

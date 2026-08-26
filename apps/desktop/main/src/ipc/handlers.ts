@@ -1,5 +1,5 @@
 import type { DocumentSummaryDTO } from '@aliasai/application'
-import { IpcValidationError, optionalBoolean, optionalText, requireEnum, requireId, requireText } from './validate'
+import { IpcValidationError, optionalBoolean, optionalText, requireEnum, requireId, requireNonNegativeInteger, requireText } from './validate'
 import { toIpcResult, type IpcResult } from './errors'
 import type { AliasAiChannel, AliasAiInvokeMap } from './contract'
 import type { AliasAiRuntime } from '../runtime'
@@ -118,6 +118,41 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
         const primaryAlias = requireText(readField(payload, 'primaryAlias'), 'primaryAlias', 200)
         const entityType = requireEnum(readField(payload, 'entityType'), ['PERSON', 'ORGANIZATION'], 'entityType')
         return services.reviewOperations.createEntityAndAssign(mentionId, { primaryAlias, entityType })
+      }),
+    'review:renameEntity': (payload) =>
+      toIpcResult(() => {
+        const entityId = requireId(readField(payload, 'entityId'), 'entityId')
+        const primaryAlias = requireText(readField(payload, 'primaryAlias'), 'primaryAlias', 200)
+        return services.reviewOperations.renameEntity(entityId, primaryAlias)
+      }),
+    'review:rejectMention': (payload) =>
+      toIpcResult(() => {
+        const mentionId = requireId(readField(payload, 'mentionId'), 'mentionId')
+        return services.reviewOperations.rejectMention(mentionId)
+      }),
+    'review:mergeEntities': (payload) =>
+      toIpcResult(() => {
+        const sourceEntityId = requireId(readField(payload, 'sourceEntityId'), 'sourceEntityId')
+        const targetEntityId = requireId(readField(payload, 'targetEntityId'), 'targetEntityId')
+        return services.reviewOperations.mergeEntities(sourceEntityId, targetEntityId)
+      }),
+    'review:splitMention': (payload) =>
+      toIpcResult(() => {
+        const mentionId = requireId(readField(payload, 'mentionId'), 'mentionId')
+        const primaryAlias = requireText(readField(payload, 'primaryAlias'), 'primaryAlias', 200)
+        return services.reviewOperations.splitMention(mentionId, primaryAlias)
+      }),
+    'review:createManualMention': (payload) =>
+      toIpcResult(() => {
+        const blockId = requireId(readField(payload, 'blockId'), 'blockId')
+        const type = requireEnum(
+          readField(payload, 'type'),
+          ['PERSON', 'ORGANIZATION', 'PHONE', 'EMAIL', 'ID_CARD', 'BANK_ACCOUNT', 'ADDRESS'],
+          'type'
+        )
+        const startOffset = requireNonNegativeInteger(readField(payload, 'startOffset'), 'startOffset')
+        const endOffset = requireNonNegativeInteger(readField(payload, 'endOffset'), 'endOffset')
+        return services.reviewOperations.createManualMention({ blockId, type, startOffset, endOffset })
       }),
     'review:addConstraint': (payload) =>
       toIpcResult(() => {

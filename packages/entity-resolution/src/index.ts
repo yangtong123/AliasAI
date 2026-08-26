@@ -18,7 +18,7 @@ export type ResolutionDecision = 'AUTO_LINK' | 'REVIEW' | 'NEW_ENTITY' | 'UNRESO
 export type HardRule = 'MUST_LINK' | 'CANNOT_LINK'
 
 /** Version marker for the decision/scoring algorithm; bump on any behavioral change. */
-export const RESOLUTION_ALGORITHM_VERSION = 'er-v1'
+export const RESOLUTION_ALGORITHM_VERSION = 'er-v2'
 
 export interface ResolutionMention {
   readonly id: string
@@ -65,6 +65,80 @@ export interface CandidateScoringInput {
   readonly userCannotLink: boolean
   /** True when a USER MUST_LINK constraint exists between the candidate entity and another entity referenced by the mention's shared ProtectedValue. */
   readonly userMustLink: boolean
+  /** True when a labeled contract field group explicitly places this value under the subject Mention. */
+  readonly sameLabeledFieldGroup?: boolean
+}
+
+export interface ContextMention {
+  readonly id: string
+  readonly type: MentionType
+  readonly startOffset: number
+  readonly endOffset: number
+}
+
+export interface ContextLinkEvidence {
+  readonly mentionId: string
+  readonly subjectMentionId: string
+  readonly evidenceType: 'SAME_LABELED_FIELD_GROUP'
+  readonly score: number
+}
+
+const SUBJECT_LABELS: Readonly<Record<'PERSON' | 'ORGANIZATION', RegExp>> = {
+  PERSON: /(?:授权代表|法定代表人|委托代理人|代理人|联系人|经办人|负责人|姓名)\s*[：:]\s*$/u,
+  ORGANIZATION: /(?:出租方|承租方|甲方|乙方|委托方|受托方|公司名称|单位名称)\s*[：:]\s*$/u
+}
+
+const VALUE_LABELS: Readonly<Partial<Record<MentionType, RegExp>>> = {
+  PHONE: /(?:手机号码|联系电话|手机号|手机|电话)\s*[：:]\s*$/u,
+  EMAIL: /(?:电子邮箱|电子邮件|邮箱|邮件)\s*[：:]\s*$/u,
+  ID_CARD: /(?:居民身份证号码|身份证号码|身份证号|证件号码|证件号)\s*[：:]\s*$/u,
+  BANK_ACCOUNT: /(?:银行账号|银行账户|银行卡号|开户账号|账号)\s*[：:]\s*$/u,
+  ADDRESS: /(?:联系地址|通讯地址|住所地|地址)\s*[：:]\s*$/u
+}
+
+/**
+ * Extracts only high-precision, same-block ownership evidence. A subject must
+ * itself follow an explicit role/party label, and every attached value must
+ * follow its own field label before the next subject or sentence boundary.
+ */
+export function extractLabeledContextLinks(
+  text: string,
+  mentions: readonly ContextMention[]
+): readonly ContextLinkEvidence[] {
+  const sorted = [...mentions].sort(
+    (left, right) => left.startOffset - right.startOffset || left.endOffset - right.endOffset || left.id.localeCompare(right.id)
+  )
+  const subjects = sorted.filter(
+    (mention): mention is ContextMention & { readonly type: 'PERSON' | 'ORGANIZATION' } =>
+      mention.type === 'PERSON' || mention.type === 'ORGANIZATION'
+  )
+  const links: ContextLinkEvidence[] = []
+
+  for (const [subjectIndex, subject] of subjects.entries()) {
+    const subjectPrefix = text.slice(Math.max(0, subject.startOffset - 32), subject.startOffset)
+    if (!SUBJECT_LABELS[subject.type].test(subjectPrefix)) continue
+    const nextSubjectStart = subjects[subjectIndex + 1]?.startOffset ?? text.length
+    const hardEnd = Math.min(nextSubjectStart, subject.endOffset + 200)
+
+    for (const mention of sorted) {
+      if (mention.startOffset < subject.endOffset || mention.startOffset >= hardEnd) continue
+      const label = VALUE_LABELS[mention.type]
+      if (label === undefined) continue
+      if (subject.type === 'ORGANIZATION' && mention.type === 'ID_CARD') continue
+      const between = text.slice(subject.endOffset, mention.startOffset)
+      if (/[\n。；;]/u.test(between)) continue
+      const valuePrefix = text.slice(Math.max(subject.endOffset, mention.startOffset - 24), mention.startOffset)
+      if (!label.test(valuePrefix)) continue
+      links.push({
+        mentionId: mention.id,
+        subjectMentionId: subject.id,
+        evidenceType: 'SAME_LABELED_FIELD_GROUP',
+        score: 100
+      })
+    }
+  }
+
+  return links
 }
 
 const IDENTIFIER_EVIDENCE: Readonly<Partial<Record<MentionType, string>>> = {
@@ -118,6 +192,9 @@ export function scoreCandidate(mentionType: MentionType, input: CandidateScoring
   }
   if ((mentionType === 'PERSON' || mentionType === 'ORGANIZATION') && input.nameExactMatch) {
     evidence.push({ type: 'NAME_EXACT', weight: 25, score: 25 })
+  }
+  if (input.sameLabeledFieldGroup) {
+    evidence.push({ type: 'SAME_LABELED_FIELD_GROUP', weight: 100, score: 100 })
   }
   return { score: evidence.reduce((total, item) => total + item.score, 0), evidence }
 }

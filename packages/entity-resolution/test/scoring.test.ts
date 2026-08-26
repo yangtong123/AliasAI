@@ -12,8 +12,8 @@ const input = (overrides: Partial<CandidateScoringInput> = {}): CandidateScoring
 })
 
 describe('RESOLUTION_ALGORITHM_VERSION', () => {
-  it('is pinned to er-v1', () => {
-    expect(RESOLUTION_ALGORITHM_VERSION).toBe('er-v1')
+  it('is pinned to er-v2', () => {
+    expect(RESOLUTION_ALGORITHM_VERSION).toBe('er-v2')
   })
 })
 
@@ -111,6 +111,13 @@ describe('scoreCandidate', () => {
         evidence: [{ type: 'NAME_EXACT', weight: 25, score: 25 }]
       })
     }
+  })
+
+  it('scores an explicit labeled field group strongly enough for identifier auto-linking', () => {
+    expect(scoreCandidate('PHONE', input({ sameLabeledFieldGroup: true }))).toEqual({
+      score: 100,
+      evidence: [{ type: 'SAME_LABELED_FIELD_GROUP', weight: 100, score: 100 }]
+    })
   })
 
   it('accumulates name evidence with identifier evidence when both apply', () => {

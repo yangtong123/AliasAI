@@ -179,6 +179,11 @@ button.mention.decision-auto_linked {
   background: rgba(63, 143, 107, 0.12);
 }
 
+button.mention.decision-rejected {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
 button.mention.selected {
   outline: 2px solid #6ea8ff;
 }
@@ -206,11 +211,26 @@ button.mention.selected {
 }
 
 .new-entity,
-.entity-picker form {
+.entity-picker form,
+.inline-operation,
+.manual-mention {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   margin: 8px 0;
+}
+
+.manual-mention {
+  padding: 10px;
+  margin-bottom: 12px;
+  border: 1px dashed #3a506f;
+  border-radius: 8px;
+  align-items: center;
+}
+
+button.danger {
+  border-color: #8d4b55;
+  color: #ffb8c0;
 }
 
 .pipeline .stages {

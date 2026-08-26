@@ -35,6 +35,13 @@ export function requireText(value: unknown, field: string, maxLength: number): s
   return value
 }
 
+export function requireNonNegativeInteger(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new IpcValidationError(field, `${field} must be a non-negative integer`)
+  }
+  return value
+}
+
 /** Reads an optional boolean, defaulting to false; anything else is rejected. */
 export function optionalBoolean(value: unknown, field: string, fallback: boolean): boolean {
   if (value === undefined) return fallback

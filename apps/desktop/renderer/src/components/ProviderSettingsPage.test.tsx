@@ -1,4 +1,4 @@
-import { cleanup, screen } from '@testing-library/react'
+import { cleanup, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderInEnglish } from '../test-utils'
@@ -122,9 +122,17 @@ describe('ProviderSettingsPage', () => {
     const user = userEvent.setup()
 
     renderInEnglish(<ProviderSettingsPage onClose={() => {}} />)
-    await user.click(await screen.getByRole('button', { name: 'Test connection' }))
+    // The button stays disabled until the async provider status loads and
+    // selects the openai-compatible kind; clicking earlier would be dropped.
+    const testButton = await screen.findByRole('button', { name: 'Test connection' })
+    await waitFor(() => {
+      expect(testButton).toHaveProperty('disabled', false)
+    })
+    await user.click(testButton)
 
-    expect(await screen.findByText('AI provider endpoint returned HTTP 401')).toBeDefined()
+    expect(
+      await screen.findByText('AI provider endpoint returned HTTP 401', undefined, { timeout: 3_000 })
+    ).toBeDefined()
   })
 
   it('warns when the stored configuration is unusable and clear resets to Mock', async () => {

@@ -108,14 +108,14 @@ DETECTED -> RESOLVING -> READY
 
 Resolution decrypts each Mention transiently, normalizes and fingerprints its value,
 creates or reuses the Matter-scoped ProtectedValue, scores candidates with the
-`er-v1` evidence rules, and applies the decision atomically: `AUTO_LINK` assigns the
+`er-v2` evidence rules, including explicit same-labeled-field-group context, and applies the decision atomically: `AUTO_LINK` assigns the
 Mention to the candidate Entity (`MENTION_ASSIGNED`, actor SYSTEM), `NEW_ENTITY`
 creates an Entity with a random Public Token and a synthetic primary alias that never
 contains Mention plaintext, `REVIEW` persists pending candidates for human review,
 and `UNRESOLVED` leaves the Mention assigned to its ProtectedValue only. A `READY`
-Document's resolution is idempotent. Manual `assign`/`reassign` and Must-Link/
-Cannot-Link constraints are application operations that append `MENTION_ASSIGNED`,
-`MENTION_REASSIGNED`, or `CONSTRAINT_CREATED` ResolutionEvents in the same
+Document's resolution is idempotent. Manual assign/reassign, rename, reject,
+manual Mention creation, merge, split, and Must-Link/Cannot-Link constraints are
+application operations that append corresponding ResolutionEvents in the same
 transaction as the mutation.
 
 Pseudonymization completes the local pipeline:
@@ -125,15 +125,16 @@ READY -> SANITIZING -> SANITIZED
                     `-> FAILED -> SANITIZING
 ```
 
-Sanitization decrypts each Block transiently in reading order and replaces every
+Sanitization decrypts each Block transiently in reading order and replaces every accepted
 Mention range with `Alias〔@Token〕`, working strictly from
-Mention -> Entity -> Primary Alias + ProtectedValue restoration token — never raw
-string replacement. The restoration token is value-level and Matter-scoped: each
+Mention -> ProtectedValue restoration token plus an Entity primary Alias when a
+reliable owner exists — never raw string replacement. Entity-less values use a
+type-level alias and do not create fake canonical Entities. The restoration token is value-level and Matter-scoped: each
 ProtectedValue of an Entity (name, ID card, email, bank account) carries its own
 token, so one Entity holds several distinct restoration anchors under different
-policies. The workflow is fail-closed: an unresolved, overlapping, out-of-range,
-or tokenless Mention aborts the run and finalizes the job as `FAILED`, so no
-sendable artifact can be produced from partially resolved input. The sanitized
+policies. The workflow is fail-closed for overlapping, out-of-range, unsupported,
+or tokenless Mentions and invalid Entity assignments. Explicitly rejected false
+positives are omitted. The sanitized
 Block texts are persisted encrypted; the Mapping Vault records, per Mention, only
 non-sensitive replacement metadata (restoration token, alias used, effective
 restore policy). The effective restore policy is type-level: names and addresses
@@ -549,7 +550,14 @@ E2.status = MERGED
 E2.mergedIntoEntityId = E1
 ```
 
-`E2.publicToken` remains valid forever and resolves through E1.
+`E2.publicToken` remains valid forever and resolves through E1. Pending
+resolution candidates scored against E2 are redirected to E1, or closed as
+REJECTED when E1 already proposes for the same Mention, so no ghost candidate
+survives the merge. Hard Must-Link/Cannot-Link constraints follow the identity
+as well: rules binding E2 to a third Entity are rewritten onto E1 (collapsing
+duplicates, dropping the E1-E2 pair that would become self-referential), and a
+merge that would create contradictory hard rules on E1 is refused and rolled
+back. The ENTITY_MERGED event is the audit anchor for these substitutions.
 
 ### Rehydration
 

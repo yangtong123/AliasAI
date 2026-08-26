@@ -185,17 +185,18 @@ export interface ProtectedValue {
 }
 
 /**
- * Maps one Mention within a SanitizedDocument to its Entity, the value-level
- * restoration token used as the rehydration anchor, and the human-readable Alias
- * at sanitization time. Sensitive plaintext and encrypted persistence fields
- * intentionally do not belong here.
+ * Maps one Mention within a SanitizedDocument to its optional Entity, the
+ * value-level restoration token used as the rehydration anchor, and the
+ * human-readable Alias at sanitization time. Entity-less mappings are the safe
+ * fallback for values that have no reliable identity owner. Sensitive plaintext
+ * and encrypted persistence fields intentionally do not belong here.
  */
 export interface SanitizationMapping {
   readonly id: string
   readonly matterId: string
   readonly sanitizedDocumentId: string
   readonly mentionId: string
-  readonly entityId: string
+  readonly entityId?: string
   readonly publicToken: string
   readonly alias: string
   readonly restorePolicy: RestorePolicy
@@ -273,7 +274,10 @@ export type ResolutionEventType =
   | 'MENTION_REASSIGNED'
   | 'ENTITY_MERGED'
   | 'ENTITY_SPLIT'
+  | 'ENTITY_RENAMED'
   | 'ENTITY_CONFIRMED'
+  | 'MENTION_CREATED'
+  | 'MENTION_REJECTED'
   | 'CONSTRAINT_CREATED'
 
 export type ResolutionActor = 'SYSTEM' | 'USER'

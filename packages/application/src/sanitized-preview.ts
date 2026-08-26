@@ -132,9 +132,8 @@ export class SanitizedPreviewService {
 /** Mirrors the fail-closed predicates of PseudonymizationService.sanitize. */
 function blockerReason(mention: SanitizationReadinessMention): SanitizationBlockerReason | null {
   if (mentionTypeToProtectedValueType(mention.mentionType) === undefined) return 'UNSUPPORTED_TYPE'
-  if (mention.entityId === null) return 'UNRESOLVED'
-  if (mention.entityStatus !== 'ACTIVE') return 'INACTIVE_ENTITY'
-  if (mention.entityPrimaryAlias === null) return 'MISSING_ALIAS'
   if (mention.protectedValuePublicToken === null) return 'MISSING_TOKEN'
+  if (mention.entityId !== null && mention.entityStatus !== 'ACTIVE') return 'INACTIVE_ENTITY'
+  if (mention.entityId !== null && mention.entityPrimaryAlias === null) return 'MISSING_ALIAS'
   return null
 }

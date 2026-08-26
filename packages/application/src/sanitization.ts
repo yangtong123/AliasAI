@@ -48,13 +48,22 @@ export function sanitizedBlockTextContext(sanitizedBlockId: string): Buffer {
   return Buffer.from(`${sanitizedBlockId}:sanitizedBlock.text`)
 }
 
+const VALUE_LEVEL_ALIASES = {
+  PERSON: '个人',
+  ORGANIZATION: '机构',
+  ADDRESS: '地址',
+  PHONE: '电话',
+  EMAIL: '邮箱',
+  ID_CARD: '身份证号',
+  BANK_ACCOUNT: '银行账户'
+} as const
+
 /**
  * Converts a READY Document Model into an encrypted sanitized artifact and its
- * Mapping Vault. Replacements come strictly from Mention -> Entity -> Primary
- * Alias/Public Token; the workflow is fail-closed, so unresolved, overlapping,
- * out-of-range, or tokenless Mentions abort the run instead of producing a
- * sendable artifact. Plaintext never persists; the vault stores only pseudonym
- * metadata.
+ * Mapping Vault. Entity-backed Mentions use their primary Alias; Mentions with
+ * no reliable Entity use a type-level Alias plus their value restoration token.
+ * Overlapping, out-of-range, tokenless, or invalid Entity-backed Mentions still
+ * abort the run. Plaintext never persists; the vault stores only pseudonym metadata.
  */
 export class PseudonymizationService {
   constructor(
@@ -109,21 +118,35 @@ export class PseudonymizationService {
               `Mention type ${mention.type} cannot be sanitized in V1`
             )
           }
-          if (
-            mention.entityId === undefined ||
-            mention.entityStatus !== 'ACTIVE' ||
-            mention.entityPrimaryAlias === null ||
-            mention.protectedValuePublicToken === null
-          ) {
+          if (mention.protectedValuePublicToken === null) {
             throw new SanitizationError(
               'UNRESOLVED_MENTION',
-              'Every Mention must resolve to an active Entity with a restoration token before sanitization'
+              'Every supported Mention must have a restoration token before sanitization'
+            )
+          }
+          if (
+            mention.entityId !== undefined &&
+            (mention.entityStatus !== 'ACTIVE' || mention.entityPrimaryAlias === null)
+          ) {
+            throw new SanitizationError(
+              'INVALID_ENTITY_ASSIGNMENT',
+              'An assigned Mention must reference an active Entity with a primary Alias'
+            )
+          }
+          const alias =
+            mention.entityId === undefined
+              ? VALUE_LEVEL_ALIASES[mention.type as keyof typeof VALUE_LEVEL_ALIASES]
+              : mention.entityPrimaryAlias!
+          if (alias === undefined) {
+            throw new SanitizationError(
+              'UNSUPPORTED_MENTION_TYPE',
+              `Mention type ${mention.type} cannot use value-level sanitization`
             )
           }
           replacements.push({
             startOffset: mention.startOffset,
             endOffset: mention.endOffset,
-            alias: mention.entityPrimaryAlias,
+            alias,
             publicToken: mention.protectedValuePublicToken
           })
           mappings.push({
@@ -131,9 +154,9 @@ export class PseudonymizationService {
             matterId: block.matterId,
             sanitizedDocumentId,
             mentionId: mention.id,
-            entityId: mention.entityId,
+            ...(mention.entityId === undefined ? {} : { entityId: mention.entityId }),
             publicToken: mention.protectedValuePublicToken,
-            alias: mention.entityPrimaryAlias,
+            alias,
             restorePolicy: defaultRestorePolicy(protectedValueType),
             createdAt: this.now()
           })
@@ -263,10 +286,32 @@ export class RehydrationService {
         })
       }
       try {
-        tokenToTarget.set(mapping.publicToken, {
-          value: valueBytes.toString('utf8'),
-          aliases: aliasesFor(mapping.matterId, mapping.entityId)
-        })
+        // One restoration token can back several mappings (Entity-backed and
+        // value-level, or multiple Entities); merge their aliases instead of
+        // letting the last mapping win, and fail closed when the same token
+        // decrypts to different values.
+        const mappingAliases =
+          mapping.entityId === undefined
+            ? [mapping.alias]
+            : [...aliasesFor(mapping.matterId, mapping.entityId), mapping.alias]
+        const existing = tokenToTarget.get(mapping.publicToken)
+        if (existing !== undefined) {
+          if (existing.value !== valueBytes.toString('utf8')) {
+            throw new SanitizationError(
+              'MAPPING_INTEGRITY_FAILURE',
+              'Mappings for one restoration token decrypt to different values'
+            )
+          }
+          tokenToTarget.set(mapping.publicToken, {
+            value: existing.value,
+            aliases: [...new Set([...existing.aliases, ...mappingAliases])]
+          })
+        } else {
+          tokenToTarget.set(mapping.publicToken, {
+            value: valueBytes.toString('utf8'),
+            aliases: [...new Set(mappingAliases)]
+          })
+        }
       } finally {
         valueBytes.fill(0)
       }

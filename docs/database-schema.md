@@ -278,7 +278,7 @@ Unique: `(mention_id, candidate_entity_id)`.
 Entity Resolution persists every scored candidate with its evidence in the same
 transaction that completes the `RESOLVE` ProcessingJob. Score and state are validated
 by the repository and domain layers; `algorithm_version` identifies the scoring rule
-set (V1: `er-v1`).
+set (current deterministic scorer: `er-v2`).
 
 ### resolution_evidence
 
@@ -391,7 +391,7 @@ are safe to send.
 | matter_id | TEXT | FK matters(id), NOT NULL |
 | sanitized_document_id | TEXT | FK sanitized_documents(id), NOT NULL |
 | mention_id | TEXT | FK mentions(id), NOT NULL |
-| entity_id | TEXT | FK entities(id), NOT NULL |
+| entity_id | TEXT | FK entities(id), nullable when no reliable identity owner exists |
 | public_token | TEXT | NOT NULL |
 | alias | TEXT | NOT NULL |
 | restore_policy | TEXT | NOT NULL, CHECK IN ('ALWAYS_RESTORE','RESTORE_ON_REQUEST','NEVER_RESTORE') |
@@ -403,9 +403,9 @@ Index:
 
 - `idx_sanitization_mappings_matter_token(matter_id, public_token)`
 
-A scope trigger enforces that Mention and Entity belong to the mapping Matter and
-that the Mention belongs to the parent sanitized Document. `public_token` is the
-ProtectedValue's value-level restoration token (one per value type of an Entity),
+A scope trigger enforces that the Mention, and the optional Entity when present,
+belong to the mapping Matter and that the Mention belongs to the parent sanitized
+Document. `public_token` is the ProtectedValue's value-level restoration token,
 not the Entity's Public Token. Rehydration resolves the real value lazily from the
 ProtectedValue ciphertext; the vault stores no plaintext.
 

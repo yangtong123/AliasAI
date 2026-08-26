@@ -314,34 +314,85 @@ describe('PseudonymizationService and RehydrationService', () => {
     expect(JSON.stringify(mappings)).not.toContain('110101199003077774')
   })
 
-  it('is fail-closed for unresolved Mentions and recovers after a user assignment', async () => {
-    const { documentId, matterId } = seedParsedDocument(['Holder 110101199003077774 signed.'])
+  it('sanitizes an Entity-less identifier with a value-level restoration token', async () => {
+    const { documentId } = seedParsedDocument(['Holder 110101199003077774 signed.'])
     await runDetection(documentId, detectorFor([{ type: 'ID_CARD', text: '110101199003077774' }]))
     await makeResolution().resolve(documentId)
 
-    await expect(makeSanitizer().sanitize(documentId)).rejects.toMatchObject({ code: 'UNRESOLVED_MENTION' })
-    expect(documents.findById(documentId)?.parseStatus).toBe('FAILED')
-    expect(query('SELECT COUNT(*) AS count FROM sanitized_documents')).toEqual([{ count: 0 }])
-    expect(query('SELECT COUNT(*) AS count FROM sanitized_blocks')).toEqual([{ count: 0 }])
-    expect(query('SELECT COUNT(*) AS count FROM sanitization_mappings')).toEqual([{ count: 0 }])
-    const failedJobs = query(
-      "SELECT status, error_cipher FROM processing_jobs WHERE document_id = ? AND job_type = 'SANITIZE'",
-      documentId
-    ) as Array<{ status: string; error_cipher: Buffer }>
-    expect(failedJobs).toHaveLength(1)
-    expect(failedJobs[0]!.status).toBe('FAILED')
-    expect(failedJobs[0]!.error_cipher.length).toBeGreaterThan(0)
+    expect(query('SELECT entity_id FROM mentions WHERE document_id = ?', documentId)).toEqual([{ entity_id: null }])
+    expect(query('SELECT COUNT(*) AS count FROM entities')).toEqual([{ count: 0 }])
 
-    // The user resolves the Mention; the failed SANITIZE job can be retried.
-    const holder = seedEntity(matterId, 'PERSON', 'Holder One')
-    const mentionId = (query('SELECT id FROM mentions WHERE document_id = ?', documentId) as Array<{ id: string }>)[0]!.id
-    makeResolution().assign(mentionId, holder.id)
-
-    const retry = await makeSanitizer().sanitize(documentId)
-    expect(retry.document.parseStatus).toBe('SANITIZED')
-    const sanitized = sanitizedBlockTexts(retry.sanitizedDocument.id)[0]!
+    const result = await makeSanitizer().sanitize(documentId)
+    expect(result.document.parseStatus).toBe('SANITIZED')
+    const sanitized = sanitizedBlockTexts(result.sanitizedDocument.id)[0]!
     expect(sanitized).not.toContain('110101199003077774')
+    expect(sanitized).toContain('身份证号〔@I-')
+    const mappings = query(
+      'SELECT entity_id, alias, public_token FROM sanitization_mappings WHERE sanitized_document_id = ?',
+      result.sanitizedDocument.id
+    ) as Array<{ entity_id: string | null; alias: string; public_token: string }>
+    expect(mappings).toHaveLength(1)
+    expect(mappings[0]).toMatchObject({ entity_id: null, alias: '身份证号' })
+
+    expect(
+      makeRehydration().rehydrate({ sanitizedDocumentId: result.sanitizedDocument.id, text: sanitized }).text
+    ).toBe(sanitized)
+    expect(
+      makeRehydration().rehydrate({
+        sanitizedDocumentId: result.sanitizedDocument.id,
+        text: sanitized,
+        includeRestoreOnRequest: true
+      }).text
+    ).toContain('110101199003077774')
+  })
+
+  it('restores every alias form backed by one shared restoration token', async () => {
+    const sourceText = 'Holder 110101199003077774 and again 110101199003077774.'
+    const { documentId, matterId } = seedParsedDocument([sourceText])
+    await runDetection(documentId, {
+      detect(block) {
+        const value = '110101199003077774'
+        const first = block.text.indexOf(value)
+        const second = block.text.indexOf(value, first + 1)
+        return [first, second]
+          .filter((offset) => offset >= 0)
+          .map((offset) => ({
+            matterId: block.matterId,
+            documentId: block.documentId,
+            pageId: block.pageId,
+            blockId: block.blockId,
+            type: 'ID_CARD' as const,
+            strength: 'EXPLICIT' as const,
+            startOffset: offset,
+            endOffset: offset + value.length,
+            detector: 'REGEX' as const,
+            confidence: 1
+          }))
+      }
+    })
+    await makeResolution().resolve(documentId)
+    const holder = seedEntity(matterId, 'PERSON', 'Holder One')
+    const mentionIds = query(
+      'SELECT id FROM mentions WHERE document_id = ? ORDER BY start_offset',
+      documentId
+    ) as Array<{ id: string }>
+    expect(mentionIds).toHaveLength(2)
+    makeResolution().assign(mentionIds[0]!.id, holder.id)
+
+    const result = await makeSanitizer().sanitize(documentId)
+    const sanitized = sanitizedBlockTexts(result.sanitizedDocument.id)[0]!
+    // One value, two mappings: an Entity-backed alias and a value-level alias
+    // share the same restoration token.
     expect(sanitized).toContain('Holder One〔@I-')
+    expect(sanitized).toContain('身份证号〔@I-')
+
+    const rehydrated = makeRehydration().rehydrate({
+      sanitizedDocumentId: result.sanitizedDocument.id,
+      text: sanitized,
+      includeRestoreOnRequest: true
+    })
+    expect(rehydrated.text).toBe(sourceText)
+    expect(rehydrated.unresolvedTokens).toEqual([])
   })
 
   it('is idempotent after completion', async () => {

@@ -82,7 +82,7 @@ export interface ConstraintDTO {
  * open PENDING candidates needs review; an assigned mention either auto-linked
  * or came from a user decision; otherwise it is unresolved.
  */
-export type MentionDecisionStatus = 'AUTO_LINKED' | 'USER_ASSIGNED' | 'NEEDS_REVIEW' | 'UNRESOLVED'
+export type MentionDecisionStatus = 'AUTO_LINKED' | 'USER_ASSIGNED' | 'NEEDS_REVIEW' | 'UNRESOLVED' | 'REJECTED'
 
 export interface MentionReviewDTO {
   readonly mentionId: string
@@ -130,6 +130,7 @@ export interface DocumentReviewDTO {
     readonly resolved: number
     readonly needsReview: number
     readonly unresolved: number
+    readonly rejected: number
   }
   readonly jobs: readonly JobSummaryDTO[]
 }
@@ -240,7 +241,8 @@ export class ReviewQueryService {
       mentions: mentionDtos.length,
       resolved: mentionDtos.filter((mention) => mention.assignedEntity !== null).length,
       needsReview: mentionDtos.filter((mention) => mention.decisionStatus === 'NEEDS_REVIEW').length,
-      unresolved: mentionDtos.filter((mention) => mention.decisionStatus === 'UNRESOLVED').length
+      unresolved: mentionDtos.filter((mention) => mention.decisionStatus === 'UNRESOLVED').length,
+      rejected: mentionDtos.filter((mention) => mention.decisionStatus === 'REJECTED').length
     }
     const jobs = this.review
       .findLatestJobs(documentId)
@@ -351,13 +353,16 @@ export class ReviewQueryService {
     const assignedEntity = mention.entityId === undefined ? null : (entitiesById.get(mention.entityId) ?? null)
     // The latest assignment event's actor distinguishes system auto-links from
     // user decisions; both close candidates, so candidate state alone cannot.
-    const decisionStatus: MentionDecisionStatus = hasPending
-      ? 'NEEDS_REVIEW'
-      : mention.entityId === undefined
-        ? 'UNRESOLVED'
-        : assignmentActors.get(mention.id) === 'USER'
-          ? 'USER_ASSIGNED'
-          : 'AUTO_LINKED'
+    const decisionStatus: MentionDecisionStatus =
+      mention.reviewStatus === 'REJECTED'
+        ? 'REJECTED'
+        : hasPending
+          ? 'NEEDS_REVIEW'
+          : mention.entityId === undefined
+            ? 'UNRESOLVED'
+            : assignmentActors.get(mention.id) === 'USER'
+              ? 'USER_ASSIGNED'
+              : 'AUTO_LINKED'
     const topTwo = candidates.slice(0, 2)
 
     return {

@@ -36,6 +36,7 @@ import type {
 } from '@aliasai/database'
 import {
   RESOLUTION_ALGORITHM_VERSION,
+  extractLabeledContextLinks,
   isValidNormalizedValue,
   mentionTypeToProtectedValueType,
   normalizeMentionValue,
@@ -46,6 +47,7 @@ import {
   type ScoredCandidate
 } from '@aliasai/entity-resolution'
 import type { ApplicationKeys } from './index'
+import { documentBlockTextContext } from './document-processing'
 import { mentionTextContext, privacyDetectionErrorContext } from './privacy-detection'
 
 export type EntityResolutionIdFactory = (timestamp: number) => string
@@ -83,6 +85,23 @@ export function resolutionEventContext(eventId: string): Buffer {
 }
 
 const IDENTIFIER_MENTION_TYPES = new Set<MentionType>(['PHONE', 'EMAIL', 'ID_CARD', 'BANK_ACCOUNT', 'ADDRESS'])
+
+/**
+ * An Alias becomes the visible replacement text in sanitized artifacts, so it
+ * must be checked against every ProtectedValue class in the Matter — not just
+ * the current Mention or Entity. A pseudonym that spells out another party's
+ * real name, phone, or address is a leak even when it belongs to a different
+ * Entity.
+ */
+const ALIAS_SAFETY_MENTION_TYPES: readonly MentionType[] = [
+  'PERSON',
+  'ORGANIZATION',
+  'PHONE',
+  'EMAIL',
+  'ID_CARD',
+  'BANK_ACCOUNT',
+  'ADDRESS'
+]
 
 interface PlannedProtectedValue {
   readonly id: string
@@ -272,6 +291,44 @@ export class EntityResolutionService {
         workItems.push({ mention, normalized, protectedValueType, fingerprint, protectedValue })
       }
 
+      // Build high-precision ownership evidence from the encrypted source blocks.
+      // Only Mention ids are retained; decrypted block plaintext is discarded
+      // before candidate scoring begins.
+      const contextSubjectByMentionId = new Map<string, string>()
+      const mentionsByBlockId = new Map<string, ResolutionMentionSource[]>()
+      for (const mention of begun.mentions) {
+        const grouped = mentionsByBlockId.get(mention.blockId) ?? []
+        grouped.push(mention)
+        mentionsByBlockId.set(mention.blockId, grouped)
+      }
+      for (const block of begun.blocks) {
+        const blockMentions = mentionsByBlockId.get(block.id)
+        if (blockMentions === undefined || blockMentions.length < 2) continue
+        let plaintextBytes: Buffer
+        try {
+          plaintextBytes = decrypt(block.textCipher, this.keys.persistenceKey, documentBlockTextContext(block.id))
+        } catch (error) {
+          throw new EntityResolutionError('BLOCK_DECRYPTION_FAILED', 'Document block could not be decrypted for entity resolution', {
+            cause: error
+          })
+        }
+        let links
+        try {
+          links = extractLabeledContextLinks(
+            plaintextBytes.toString('utf8'),
+            blockMentions.map((mention) => ({
+              id: mention.id,
+              type: mention.type,
+              startOffset: mention.startOffset,
+              endOffset: mention.endOffset
+            }))
+          )
+        } finally {
+          plaintextBytes.fill(0)
+        }
+        for (const link of links) contextSubjectByMentionId.set(link.mentionId, link.subjectMentionId)
+      }
+
       // Matter-scoped reference data is loaded lazily, once per Matter.
       const constraintsByMatter = new Map<string, readonly EntityConstraint[]>()
       const loadConstraints = (matterId: string): readonly EntityConstraint[] => {
@@ -323,6 +380,7 @@ export class EntityResolutionService {
       const candidates: CreateResolutionCandidateInput[] = []
       const resolvedCandidateIds = new Set<string>()
       const events: CreateResolutionEventInput[] = []
+      const resolvedEntityByMentionId = new Map<string, Entity>()
       for (const [index, work] of workItems.entries()) {
         const { mention } = work
         if (mention.entityId !== undefined) {
@@ -338,6 +396,10 @@ export class EntityResolutionService {
               protectedValueId: work.protectedValue.id,
               entityId: mention.entityId
             })
+          }
+          const assignedEntity = this.entities.findById(mention.entityId)
+          if (assignedEntity !== undefined && assignedEntity.matterId === mention.matterId && assignedEntity.status === 'ACTIVE') {
+            resolvedEntityByMentionId.set(mention.id, assignedEntity)
           }
           this.resolution.updateProgress(jobId, index + 1, workItems.length)
           continue
@@ -427,6 +489,37 @@ export class EntityResolutionService {
           }
         }
 
+        const contextSubjectId = contextSubjectByMentionId.get(mention.id)
+        const contextEntity = contextSubjectId === undefined ? undefined : resolvedEntityByMentionId.get(contextSubjectId)
+        if (contextEntity !== undefined) {
+          const labeled = scoreCandidate(mention.type, {
+            sharesProtectedValue: false,
+            conflictsProtectedValue: false,
+            nameExactMatch: false,
+            userCannotLink: false,
+            userMustLink: false,
+            sameLabeledFieldGroup: true
+          })
+          const existing = scoredCandidates.find((candidate) => candidate.input.entity.id === contextEntity.id)
+          if (existing === undefined) {
+            scoredCandidates.push({ input: toCandidateInput(contextEntity, labeled), scored: labeled })
+          } else if (!existing.scored.evidence.some((item) => item.type === 'SAME_LABELED_FIELD_GROUP')) {
+            // Explicit labeled-field context must reinforce an already-scored
+            // candidate (e.g. one found via a shared ProtectedValue) instead of
+            // being dropped: evidence is additive, so the decision gate and the
+            // stored explanation both see it.
+            const merged: ScoredCandidate = {
+              score: existing.scored.score + labeled.score,
+              evidence: [...existing.scored.evidence, ...labeled.evidence],
+              ...(existing.scored.hardRule === undefined ? {} : { hardRule: existing.scored.hardRule })
+            }
+            scoredCandidates[scoredCandidates.indexOf(existing)] = {
+              input: toCandidateInput(contextEntity, merged),
+              scored: merged
+            }
+          }
+        }
+
         const proposal = proposeResolution(
           mention,
           scoredCandidates.map((candidate) => candidate.input)
@@ -443,6 +536,8 @@ export class EntityResolutionService {
           }
           links.push(this.planLink(mention.matterId, entityId, work.protectedValue.id))
           events.push(this.planAssignmentEvent(mention, entityId, 'AUTO_LINK', transientCiphers))
+          const winning = scoredCandidates.find((candidate) => candidate.input.entity.id === entityId)?.input.entity
+          if (winning !== undefined) resolvedEntityByMentionId.set(mention.id, winning)
         } else if (proposal.decision === 'NEW_ENTITY') {
           const entityType: EntityType = mention.type === 'ORGANIZATION' ? 'ORGANIZATION' : 'PERSON'
           const created = this.planNewEntity(mention.matterId, entityType, transientCiphers)
@@ -450,6 +545,7 @@ export class EntityResolutionService {
           entityId = created.entity.id
           links.push(this.planLink(mention.matterId, entityId, work.protectedValue.id))
           events.push(this.planAssignmentEvent(mention, entityId, 'NEW_ENTITY', transientCiphers))
+          resolvedEntityByMentionId.set(mention.id, created.entity)
         }
         decisions.push({
           mentionId: mention.id,
@@ -623,15 +719,66 @@ export class EntityResolutionService {
     }
   }
 
+  /**
+   * Rejects an Alias whose normalized form matches any ProtectedValue in the
+   * Matter under any value class. The check is matter-wide because the Alias is
+   * published verbatim inside sanitized artifacts: spelling out another party's
+   * real name or phone as this Entity's Alias leaks it even though it belongs
+   * to a different Entity.
+   */
+  #assertAliasIsSafeForMatter(matterId: string, alias: string, message: string): void {
+    const matterKey = deriveMatterSearchKey(this.#searchKey, matterId)
+    try {
+      for (const type of ALIAS_SAFETY_MENTION_TYPES) {
+        const protectedValueType = mentionTypeToProtectedValueType(type)
+        if (protectedValueType === undefined) continue
+        const normalized = normalizeMentionValue(type, alias)
+        if (!isValidNormalizedValue(type, normalized)) continue
+        const fingerprint = fingerprintNormalizedValue(matterKey, normalized)
+        try {
+          if (this.protectedValues.findByFingerprint(matterId, protectedValueType, fingerprint) !== undefined) {
+            throw new EntityResolutionError('UNSAFE_ALIAS', message)
+          }
+        } finally {
+          fingerprint.fill(0)
+        }
+      }
+    } finally {
+      matterKey.fill(0)
+    }
+  }
+
   /** Creates a USER-actor Entity and assigns the Mention to it in a single transaction. */
   createEntityWithAssignment(
     mentionId: string,
-    input: { readonly primaryAlias: string; readonly entityType: EntityType }
+    input: { readonly primaryAlias: string; readonly entityType: EntityType },
+    splitFromEntityId?: string
   ): { readonly entity: Entity; readonly primaryAlias: EntityAlias; readonly mention: Mention } {
     if (input.primaryAlias.trim().length === 0) throw new Error('Primary alias must not be empty')
     try {
       const mention = this.resolution.findMentionById(mentionId)
       if (mention === undefined) throw new Error('Mention was not found')
+      let mentionBytes: Buffer
+      try {
+        mentionBytes = decrypt(mention.textCipher, this.keys.persistenceKey, mentionTextContext(mention.id))
+      } catch (error) {
+        throw new EntityResolutionError('MENTION_DECRYPTION_FAILED', 'Mention text could not be decrypted', { cause: error })
+      }
+      try {
+        if (mentionBytes.toString('utf8').trim().toLocaleLowerCase() === input.primaryAlias.trim().toLocaleLowerCase()) {
+          throw new EntityResolutionError(
+            'UNSAFE_ALIAS',
+            'The alias replaces this text in sanitized documents, so it must be a pseudonym (for example "Party A"), not the real value'
+          )
+        }
+      } finally {
+        mentionBytes.fill(0)
+      }
+      this.#assertAliasIsSafeForMatter(
+        mention.matterId,
+        input.primaryAlias,
+        'That alias matches a real protected value in this Matter; use a pseudonym such as "Party A" instead'
+      )
       const createdAt = this.now()
       const entity: Entity = {
         id: this.generateId(createdAt),
@@ -671,6 +818,16 @@ export class EntityResolutionService {
       } finally {
         assignmentPayloadBytes.fill(0)
       }
+      const splitEventId = splitFromEntityId === undefined ? undefined : this.generateId(createdAt)
+      let splitPayloadCipher: Buffer | undefined
+      if (splitEventId !== undefined) {
+        const splitPayloadBytes = Buffer.from(JSON.stringify({ sourceEntityId: splitFromEntityId }), 'utf8')
+        try {
+          splitPayloadCipher = encrypt(splitPayloadBytes, this.keys.persistenceKey, resolutionEventContext(splitEventId))
+        } finally {
+          splitPayloadBytes.fill(0)
+        }
+      }
       try {
         return this.resolution.createEntityWithAssignment({
           entity,
@@ -695,14 +852,298 @@ export class EntityResolutionService {
             actor: 'USER',
             payloadCipher: assignmentPayloadCipher,
             createdAt
-          }
+          },
+          ...(splitEventId === undefined || splitPayloadCipher === undefined
+            ? {}
+            : {
+                splitEvent: {
+                  id: splitEventId,
+                  matterId: mention.matterId,
+                  type: 'ENTITY_SPLIT' as const,
+                  entityId: entity.id,
+                  mentionId,
+                  actor: 'USER' as const,
+                  payloadCipher: splitPayloadCipher,
+                  createdAt
+                }
+              })
         })
       } finally {
         creationPayloadCipher.fill(0)
         assignmentPayloadCipher.fill(0)
+        splitPayloadCipher?.fill(0)
       }
     } catch (error) {
+      if (error instanceof EntityResolutionError) throw error
       throw new EntityResolutionError('ASSIGNMENT_FAILED', 'Entity creation and assignment failed', { cause: error })
+    }
+  }
+
+  renameEntity(entityId: string, primaryAlias: string): EntityAlias {
+    const alias = primaryAlias.trim()
+    if (alias.length === 0) throw new EntityResolutionError('RENAME_FAILED', 'Primary alias must not be empty')
+    try {
+      const entity = this.entities.findById(entityId)
+      if (entity === undefined || entity.status !== 'ACTIVE') throw new Error('Active Entity was not found')
+      this.#assertAliasIsSafeForMatter(
+        entity.matterId,
+        alias,
+        'The alias replaces real values in sanitized documents, so it must not match any real name, phone, address, or other protected value in this Matter; use a pseudonym such as "Party A"'
+      )
+      const createdAt = this.now()
+      const aliasId = this.generateId(createdAt)
+      const eventId = this.generateId(createdAt)
+      const payloadBytes = Buffer.from(JSON.stringify({ aliasId }), 'utf8')
+      let payloadCipher: Buffer
+      try {
+        payloadCipher = encrypt(payloadBytes, this.keys.persistenceKey, resolutionEventContext(eventId))
+      } finally {
+        payloadBytes.fill(0)
+      }
+      try {
+        return this.resolution.renameEntity({
+          entityId,
+          alias: {
+            id: aliasId,
+            matterId: entity.matterId,
+            entityId,
+            alias,
+            aliasType: 'PRIMARY',
+            isPrimary: true,
+            createdAt
+          },
+          event: {
+            id: eventId,
+            matterId: entity.matterId,
+            type: 'ENTITY_RENAMED',
+            entityId,
+            actor: 'USER',
+            payloadCipher,
+            createdAt
+          },
+          updatedAt: createdAt
+        })
+      } finally {
+        payloadCipher.fill(0)
+      }
+    } catch (error) {
+      if (error instanceof EntityResolutionError) throw error
+      throw new EntityResolutionError('RENAME_FAILED', 'Entity could not be renamed', { cause: error })
+    }
+  }
+
+  reject(mentionId: string): Mention {
+    try {
+      const mention = this.resolution.findMentionById(mentionId)
+      if (mention === undefined) throw new Error('Mention was not found')
+      const createdAt = this.now()
+      const eventId = this.generateId(createdAt)
+      const payloadBytes = Buffer.from(JSON.stringify({ previousEntityId: mention.entityId ?? null }), 'utf8')
+      let payloadCipher: Buffer
+      try {
+        payloadCipher = encrypt(payloadBytes, this.keys.persistenceKey, resolutionEventContext(eventId))
+      } finally {
+        payloadBytes.fill(0)
+      }
+      try {
+        return this.resolution.rejectMention({
+          mentionId,
+          resolvedAt: createdAt,
+          event: {
+            id: eventId,
+            matterId: mention.matterId,
+            type: 'MENTION_REJECTED',
+            mentionId,
+            actor: 'USER',
+            payloadCipher,
+            createdAt
+          }
+        })
+      } finally {
+        payloadCipher.fill(0)
+      }
+    } catch (error) {
+      throw new EntityResolutionError('REJECTION_FAILED', 'Mention could not be rejected', { cause: error })
+    }
+  }
+
+  merge(sourceEntityId: string, targetEntityId: string): Entity {
+    try {
+      const source = this.entities.findById(sourceEntityId)
+      const target = this.entities.findById(targetEntityId)
+      if (source === undefined || target === undefined || source.matterId !== target.matterId) {
+        throw new Error('Entities were not found in one Matter')
+      }
+      const createdAt = this.now()
+      const eventId = this.generateId(createdAt)
+      const payloadBytes = Buffer.from(JSON.stringify({ targetEntityId }), 'utf8')
+      let payloadCipher: Buffer
+      try {
+        payloadCipher = encrypt(payloadBytes, this.keys.persistenceKey, resolutionEventContext(eventId))
+      } finally {
+        payloadBytes.fill(0)
+      }
+      try {
+        return this.resolution.mergeEntities({
+          sourceEntityId,
+          targetEntityId,
+          event: {
+            id: eventId,
+            matterId: source.matterId,
+            type: 'ENTITY_MERGED',
+            entityId: sourceEntityId,
+            actor: 'USER',
+            payloadCipher,
+            createdAt
+          },
+          updatedAt: createdAt
+        })
+      } finally {
+        payloadCipher.fill(0)
+      }
+    } catch (error) {
+      throw new EntityResolutionError('MERGE_FAILED', 'Entities could not be merged', { cause: error })
+    }
+  }
+
+  splitMention(mentionId: string, primaryAlias: string): { readonly entity: Entity; readonly mention: Mention } {
+    const mention = this.resolution.findMentionById(mentionId)
+    if (mention?.entityId === undefined) throw new EntityResolutionError('SPLIT_FAILED', 'Assigned Mention was not found')
+    const source = this.entities.findById(mention.entityId)
+    if (source === undefined || source.status !== 'ACTIVE') throw new EntityResolutionError('SPLIT_FAILED', 'Source Entity is not active')
+    try {
+      const result = this.createEntityWithAssignment(mentionId, { primaryAlias, entityType: source.type }, source.id)
+      return { entity: result.entity, mention: result.mention }
+    } catch (error) {
+      if (error instanceof EntityResolutionError) throw error
+      throw new EntityResolutionError('SPLIT_FAILED', 'Mention could not be split into a new Entity', { cause: error })
+    }
+  }
+
+  createManualMention(input: {
+    readonly blockId: string
+    readonly type: MentionType
+    readonly startOffset: number
+    readonly endOffset: number
+  }): Mention {
+    const protectedValueType = mentionTypeToProtectedValueType(input.type)
+    if (protectedValueType === undefined) {
+      throw new EntityResolutionError('MANUAL_MENTION_FAILED', 'Mention type cannot be protected in V1')
+    }
+    const block = this.resolution.findManualMentionBlock(input.blockId)
+    if (block === undefined) throw new EntityResolutionError('MANUAL_MENTION_FAILED', 'Document Block was not found')
+    let blockBytes: Buffer
+    try {
+      blockBytes = decrypt(block.textCipher, this.keys.persistenceKey, documentBlockTextContext(block.id))
+    } catch (error) {
+      throw new EntityResolutionError('MANUAL_MENTION_FAILED', 'Document Block could not be decrypted', { cause: error })
+    }
+    let text: string
+    try {
+      text = blockBytes.toString('utf8')
+    } finally {
+      blockBytes.fill(0)
+    }
+    if (
+      !Number.isSafeInteger(input.startOffset) || !Number.isSafeInteger(input.endOffset) ||
+      input.startOffset < 0 || input.endOffset <= input.startOffset || input.endOffset > text.length
+    ) {
+      throw new EntityResolutionError('MANUAL_MENTION_FAILED', 'Mention offsets are outside the Document Block')
+    }
+    const mentionText = text.slice(input.startOffset, input.endOffset)
+    const normalized = normalizeMentionValue(input.type, mentionText)
+    if (!isValidNormalizedValue(input.type, normalized)) {
+      throw new EntityResolutionError('MANUAL_MENTION_FAILED', 'Selected text is not valid for the Mention type')
+    }
+    const matterKey = deriveMatterSearchKey(this.#searchKey, block.matterId)
+    let fingerprint: Buffer
+    try {
+      fingerprint = fingerprintNormalizedValue(matterKey, normalized)
+    } finally {
+      matterKey.fill(0)
+    }
+    const existing = this.protectedValues.findByFingerprint(block.matterId, protectedValueType, fingerprint)
+    const createdAt = this.now()
+    const mentionId = this.generateId(createdAt)
+    const protectedValueId = existing?.id ?? this.generateId(createdAt)
+    const publicToken = existing?.publicToken ?? generateProtectedValueToken(protectedValueType)
+    const textBytes = Buffer.from(mentionText, 'utf8')
+    let textCipher: Buffer
+    try {
+      textCipher = encrypt(textBytes, this.keys.persistenceKey, mentionTextContext(mentionId))
+    } finally {
+      textBytes.fill(0)
+    }
+    let valueCipher: Buffer | undefined
+    if (existing === undefined) {
+      const valueBytes = Buffer.from(mentionText, 'utf8')
+      try {
+        valueCipher = encrypt(valueBytes, this.keys.persistenceKey, protectedValueContext(protectedValueId))
+      } finally {
+        valueBytes.fill(0)
+      }
+    }
+    const eventId = this.generateId(createdAt)
+    const payloadBytes = Buffer.from(JSON.stringify({ blockId: block.id, type: input.type, startOffset: input.startOffset, endOffset: input.endOffset }), 'utf8')
+    let payloadCipher: Buffer
+    try {
+      payloadCipher = encrypt(payloadBytes, this.keys.persistenceKey, resolutionEventContext(eventId))
+    } finally {
+      payloadBytes.fill(0)
+    }
+    try {
+      return this.resolution.createManualMention({
+        mention: {
+          id: mentionId,
+          matterId: block.matterId,
+          documentId: block.documentId,
+          pageId: block.pageId,
+          blockId: block.id,
+          protectedValueId,
+          type: input.type,
+          strength: 'EXPLICIT',
+          startOffset: input.startOffset,
+          endOffset: input.endOffset,
+          detector: 'USER',
+          confidence: 1,
+          reviewStatus: 'UNREVIEWED',
+          createdAt
+        },
+        textCipher,
+        fingerprint,
+        ...(existing === undefined
+          ? {
+              protectedValue: {
+                id: protectedValueId,
+                matterId: block.matterId,
+                type: protectedValueType,
+                valueCipher: valueCipher!,
+                fingerprint,
+                publicToken,
+                restorePolicy: 'ALWAYS_RESTORE' as const,
+                createdAt
+              }
+            }
+          : existing.publicToken === undefined
+            ? { protectedValueTokenBackfill: { id: existing.id, publicToken } }
+            : {}),
+        event: {
+          id: eventId,
+          matterId: block.matterId,
+          type: 'MENTION_CREATED',
+          mentionId,
+          actor: 'USER',
+          payloadCipher,
+          createdAt
+        }
+      })
+    } catch (error) {
+      throw new EntityResolutionError('MANUAL_MENTION_FAILED', 'Manual Mention could not be created', { cause: error })
+    } finally {
+      textCipher.fill(0)
+      valueCipher?.fill(0)
+      payloadCipher.fill(0)
+      fingerprint.fill(0)
     }
   }
 

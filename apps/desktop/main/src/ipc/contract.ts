@@ -10,7 +10,7 @@ import type {
   SanitizedPreview,
   RehydrationResult
 } from '@aliasai/application'
-import type { EntityConstraintType, EntityType } from '@aliasai/domain'
+import type { EntityConstraintType, EntityType, MentionType } from '@aliasai/domain'
 import type { AiProviderStatus } from '../ai-provider'
 
 /**
@@ -59,6 +59,23 @@ export interface AliasAiInvokeMap {
   'review:createEntityAndAssign': {
     request: { mentionId: string; primaryAlias: string; entityType: EntityType }
     response: { mention: MentionReviewDTO; entity: EntitySummaryDTO }
+  }
+  'review:renameEntity': {
+    request: { entityId: string; primaryAlias: string }
+    response: { renamed: true }
+  }
+  'review:rejectMention': { request: { mentionId: string }; response: MentionReviewDTO }
+  'review:mergeEntities': {
+    request: { sourceEntityId: string; targetEntityId: string }
+    response: { merged: true }
+  }
+  'review:splitMention': {
+    request: { mentionId: string; primaryAlias: string }
+    response: { mention: MentionReviewDTO; entityId: string }
+  }
+  'review:createManualMention': {
+    request: { blockId: string; type: MentionType; startOffset: number; endOffset: number }
+    response: MentionReviewDTO
   }
   'review:addConstraint': {
     request: {
@@ -126,6 +143,11 @@ export const ALIASAI_CHANNELS: readonly AliasAiChannel[] = [
   'review:assign',
   'review:confirm',
   'review:createEntityAndAssign',
+  'review:renameEntity',
+  'review:rejectMention',
+  'review:mergeEntities',
+  'review:splitMention',
+  'review:createManualMention',
   'review:addConstraint',
   'preview:get',
   'preview:generate',

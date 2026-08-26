@@ -25,11 +25,12 @@ Use synthetic or disposable documents only during RC testing.
    same Matter must reuse the existing Document rather than duplicate it.
 3. Run Parse, Detect, and Resolve. A scanned/raster-only PDF is expected to
    fail closed in this package because the large OCR runtime is not bundled.
-4. Select each highlighted Mention. Create or choose an Entity, then click
-   Confirm. The UI shows `review CONFIRMED` and disables the button as
-   `Confirmed`.
-5. Open Sanitized preview. Any unresolved/unsupported Mention must be listed
-   as a blocker with a Review mention action. With no blockers, generate the
+4. Inspect the automatically created Entities and assignments. Correct only
+   exceptions using rename, reassign, reject, manual Mention, merge, or split;
+   then optionally Confirm reviewed assignments.
+5. Open Sanitized preview. Unsupported or tokenless Mentions must be listed as
+   blockers. An identifier with no reliable Entity owner must still sanitize via
+   a value-level alias/token without creating an Entity. With no blockers, generate the
    preview and verify real protected values are absent.
 6. Run the AI analysis (Mock by default). The sanitized response must retain
    aliases/tokens but contain no protected plaintext. Enable the local

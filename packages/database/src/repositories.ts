@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, ne } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm'
 import type {
   AiExecution,
   Document,
@@ -663,6 +663,8 @@ function toMentionInsert(input: CreateMentionInput): typeof mentions.$inferInser
     documentId: input.documentId,
     pageId: input.pageId,
     blockId: input.blockId,
+    ...(input.entityId === undefined ? {} : { entityId: input.entityId }),
+    ...(input.protectedValueId === undefined ? {} : { protectedValueId: input.protectedValueId }),
     mentionType: input.type,
     mentionStrength: input.strength,
     textCipher: input.textCipher,
@@ -1097,6 +1099,11 @@ export interface ResolutionMentionSource extends Mention {
   readonly fingerprint: Buffer | null
 }
 
+export interface ResolutionBlockSource {
+  readonly id: string
+  readonly textCipher: Buffer
+}
+
 export interface BeginEntityResolutionInput {
   readonly documentId: string
   readonly jobId: string
@@ -1106,6 +1113,7 @@ export interface BeginEntityResolutionInput {
 export interface BegunEntityResolution {
   readonly document: Document
   readonly job: ProcessingJob
+  readonly blocks: readonly ResolutionBlockSource[]
   readonly mentions: readonly ResolutionMentionSource[]
 }
 
@@ -1170,6 +1178,8 @@ export interface CreateEntityWithAssignmentInput {
   /** Timestamp applied when open review candidates are closed by the assignment. */
   readonly resolvedAt: number
   readonly assignmentEvent: CreateResolutionEventInput
+  /** Present only when the assignment is the result of an explicit split. */
+  readonly splitEvent?: CreateResolutionEventInput
 }
 
 export interface CreatedEntityWithAssignment {
@@ -1181,6 +1191,43 @@ export interface CreatedEntityWithAssignment {
 export interface AddEntityConstraintInput {
   readonly constraint: EntityConstraint
   readonly event: CreateResolutionEventInput
+}
+
+export interface RenameEntityInput {
+  readonly entityId: string
+  readonly alias: CreateEntityAliasInput
+  readonly event: CreateResolutionEventInput
+  readonly updatedAt: number
+}
+
+export interface RejectMentionInput {
+  readonly mentionId: string
+  readonly event: CreateResolutionEventInput
+  readonly resolvedAt: number
+}
+
+export interface MergeEntitiesInput {
+  readonly sourceEntityId: string
+  readonly targetEntityId: string
+  readonly event: CreateResolutionEventInput
+  readonly updatedAt: number
+}
+
+export interface CreateManualMentionInput {
+  readonly mention: Mention
+  readonly textCipher: Buffer
+  readonly fingerprint: Buffer
+  readonly protectedValue?: CreateProtectedValueInput
+  readonly protectedValueTokenBackfill?: { readonly id: string; readonly publicToken: string }
+  readonly event: CreateResolutionEventInput
+}
+
+export interface ManualMentionBlockSource {
+  readonly id: string
+  readonly matterId: string
+  readonly documentId: string
+  readonly pageId: string
+  readonly textCipher: Buffer
 }
 
 /** Owns the RESOLVE job state machine and all entity resolution persistence transactions. */
@@ -1278,10 +1325,18 @@ export class EntityResolutionRepository {
           asc(mentions.id)
         )
         .all()
+      const blockRows = transaction
+        .select({ id: documentBlocks.id, textCipher: documentBlocks.textCipher })
+        .from(documentBlocks)
+        .innerJoin(documentPages, eq(documentPages.id, documentBlocks.pageId))
+        .where(eq(documentBlocks.documentId, input.documentId))
+        .orderBy(asc(documentPages.pageNo), asc(documentBlocks.readingOrder), asc(documentBlocks.id))
+        .all()
       const document = toDocument({ ...current, parseStatus: 'RESOLVING', updatedAt: input.startedAt })
       return {
         document,
         job,
+        blocks: blockRows,
         mentions: mentionRows.map(({ mention }) => toResolutionMentionSource(mention))
       }
     })
@@ -1839,7 +1894,7 @@ export class EntityResolutionRepository {
    * exactly: ProtectedValue link, assignment event, candidate closure.
    */
   createEntityWithAssignment(input: CreateEntityWithAssignmentInput): CreatedEntityWithAssignment {
-    const { entity, primaryAlias, creationEvent, assignmentEvent } = input
+    const { entity, primaryAlias, creationEvent, assignmentEvent, splitEvent } = input
     assertEntity(entity)
     assertEntityAlias(primaryAlias)
     assertSameMatter(entity, primaryAlias, 'entity and primary alias')
@@ -1866,6 +1921,16 @@ export class EntityResolutionRepository {
     }
     if (assignmentEvent.mentionId !== input.mentionId) {
       throw new Error('Resolution event must reference the assigned Mention')
+    }
+    if (
+      splitEvent !== undefined &&
+      (splitEvent.type !== 'ENTITY_SPLIT' ||
+        splitEvent.entityId !== entity.id ||
+        splitEvent.mentionId !== input.mentionId ||
+        splitEvent.matterId !== entity.matterId ||
+        splitEvent.actor !== 'USER')
+    ) {
+      throw new Error('Split event must identify the new Entity and reassigned Mention')
     }
 
     return this.db.transaction((transaction) => {
@@ -1947,6 +2012,9 @@ export class EntityResolutionRepository {
       }
 
       transaction.insert(resolutionEvents).values(toResolutionEventInsert(assignmentEvent)).run()
+      if (splitEvent !== undefined) {
+        transaction.insert(resolutionEvents).values(toResolutionEventInsert(splitEvent)).run()
+      }
 
       // A user decision closes every open review candidate for the Mention.
       transaction
@@ -1975,6 +2043,327 @@ export class EntityResolutionRepository {
       const updated = transaction.select().from(mentions).where(eq(mentions.id, input.mentionId)).get()
       if (updated === undefined) throw new Error('Assigned Mention was not found')
       return { entity, primaryAlias, mention: toMention(updated) }
+    })
+  }
+
+  renameEntity(input: RenameEntityInput): EntityAlias {
+    assertEntityAlias(input.alias)
+    if (
+      input.alias.entityId !== input.entityId ||
+      input.alias.aliasType !== 'PRIMARY' ||
+      !input.alias.isPrimary ||
+      input.event.type !== 'ENTITY_RENAMED' ||
+      input.event.entityId !== input.entityId ||
+      input.event.mentionId !== undefined ||
+      input.event.actor !== 'USER'
+    ) {
+      throw new Error('Rename input must identify the Entity and its new primary Alias')
+    }
+    return this.db.transaction((transaction) => {
+      const entity = transaction.select().from(entities).where(eq(entities.id, input.entityId)).get()
+      if (entity === undefined || entity.status !== 'ACTIVE' || entity.matterId !== input.alias.matterId) {
+        throw new Error('Active Entity was not found in the Matter')
+      }
+      if (input.event.matterId !== entity.matterId) throw new Error('Rename event must belong to the Entity Matter')
+      const existingAlias = transaction
+        .select()
+        .from(entityAliases)
+        .where(and(eq(entityAliases.matterId, entity.matterId), eq(entityAliases.alias, input.alias.alias)))
+        .get()
+      if (existingAlias !== undefined && existingAlias.entityId !== entity.id) {
+        throw new Error('Alias already belongs to another Entity in the Matter')
+      }
+      transaction
+        .update(entityAliases)
+        .set({ isPrimary: false, aliasType: 'GENERIC' })
+        .where(and(eq(entityAliases.entityId, entity.id), eq(entityAliases.isPrimary, true)))
+        .run()
+      if (existingAlias === undefined) transaction.insert(entityAliases).values(input.alias).run()
+      else {
+        transaction
+          .update(entityAliases)
+          .set({ isPrimary: true, aliasType: 'PRIMARY' })
+          .where(eq(entityAliases.id, existingAlias.id))
+          .run()
+      }
+      transaction.update(entities).set({ updatedAt: input.updatedAt }).where(eq(entities.id, entity.id)).run()
+      transaction.insert(resolutionEvents).values(toResolutionEventInsert(input.event)).run()
+      const renamed = transaction
+        .select()
+        .from(entityAliases)
+        .where(and(eq(entityAliases.entityId, entity.id), eq(entityAliases.isPrimary, true)))
+        .get()
+      if (renamed === undefined) throw new Error('Renamed Entity primary Alias was not found')
+      return toEntityAlias(renamed)
+    })
+  }
+
+  rejectMention(input: RejectMentionInput): Mention {
+    if (
+      input.event.type !== 'MENTION_REJECTED' ||
+      input.event.mentionId !== input.mentionId ||
+      input.event.actor !== 'USER'
+    ) {
+      throw new Error('Reject event must identify the Mention')
+    }
+    return this.db.transaction((transaction) => {
+      const row = transaction.select().from(mentions).where(eq(mentions.id, input.mentionId)).get()
+      if (row === undefined || input.event.matterId !== row.matterId) throw new Error('Mention was not found in the event Matter')
+      const document = transaction.select().from(documents).where(eq(documents.id, row.documentId)).get()
+      if (document === undefined) throw new Error('Mention Document was not found')
+      assertDocumentReviewMutable(document.parseStatus)
+      if (row.entityId !== null && row.protectedValueId !== null) {
+        const otherEvidence = transaction
+          .select({ id: mentions.id })
+          .from(mentions)
+          .where(
+            and(
+              eq(mentions.entityId, row.entityId),
+              eq(mentions.protectedValueId, row.protectedValueId),
+              ne(mentions.id, row.id),
+              ne(mentions.reviewStatus, 'REJECTED')
+            )
+          )
+          .get()
+        if (otherEvidence === undefined) {
+          transaction
+            .delete(entityProtectedValues)
+            .where(
+              and(
+                eq(entityProtectedValues.entityId, row.entityId),
+                eq(entityProtectedValues.protectedValueId, row.protectedValueId)
+              )
+            )
+            .run()
+        }
+      }
+      transaction
+        .update(mentions)
+        .set({ entityId: null, reviewStatus: 'REJECTED' })
+        .where(eq(mentions.id, input.mentionId))
+        .run()
+      transaction
+        .update(resolutionCandidates)
+        .set({ state: 'REJECTED', resolvedAt: input.resolvedAt })
+        .where(and(eq(resolutionCandidates.mentionId, input.mentionId), eq(resolutionCandidates.state, 'PENDING')))
+        .run()
+      transaction.insert(resolutionEvents).values(toResolutionEventInsert(input.event)).run()
+      const updated = transaction.select().from(mentions).where(eq(mentions.id, input.mentionId)).get()
+      if (updated === undefined) throw new Error('Rejected Mention was not found')
+      return toMention(updated)
+    })
+  }
+
+  mergeEntities(input: MergeEntitiesInput): Entity {
+    if (input.sourceEntityId === input.targetEntityId) throw new Error('Merged Entities must be distinct')
+    if (
+      input.event.type !== 'ENTITY_MERGED' ||
+      input.event.entityId !== input.sourceEntityId ||
+      input.event.mentionId !== undefined ||
+      input.event.actor !== 'USER'
+    ) {
+      throw new Error('Merge event must identify the source Entity')
+    }
+    return this.db.transaction((transaction) => {
+      const source = transaction.select().from(entities).where(eq(entities.id, input.sourceEntityId)).get()
+      const target = transaction.select().from(entities).where(eq(entities.id, input.targetEntityId)).get()
+      if (
+        source === undefined || target === undefined || source.status !== 'ACTIVE' || target.status !== 'ACTIVE' ||
+        source.matterId !== target.matterId || source.entityType !== target.entityType
+      ) {
+        throw new Error('Merge requires two active same-type Entities in one Matter')
+      }
+      if (input.event.matterId !== source.matterId) throw new Error('Merge event must belong to the Entity Matter')
+      const prohibited = transaction
+        .select({ id: entityConstraints.id })
+        .from(entityConstraints)
+        .where(
+          and(
+            eq(entityConstraints.constraintType, 'CANNOT_LINK'),
+            eq(entityConstraints.entityAId, source.id < target.id ? source.id : target.id),
+            eq(entityConstraints.entityBId, source.id < target.id ? target.id : source.id)
+          )
+        )
+        .get()
+      if (prohibited !== undefined) throw new Error('Cannot-Link constraint prohibits this merge')
+      const affectedDocuments = transaction
+        .select({ parseStatus: documents.parseStatus })
+        .from(mentions)
+        .innerJoin(documents, eq(documents.id, mentions.documentId))
+        .where(eq(mentions.entityId, source.id))
+        .all()
+      for (const document of affectedDocuments) assertDocumentReviewMutable(document.parseStatus)
+      const sourceLinks = transaction
+        .select()
+        .from(entityProtectedValues)
+        .where(eq(entityProtectedValues.entityId, source.id))
+        .all()
+      for (const link of sourceLinks) {
+        transaction
+          .insert(entityProtectedValues)
+          .values({ ...link, entityId: target.id })
+          .onConflictDoNothing()
+          .run()
+      }
+      transaction.update(mentions).set({ entityId: target.id, reviewStatus: 'UNREVIEWED' }).where(eq(mentions.entityId, source.id)).run()
+      // Pending proposals scored against the merged Entity must not dangle as
+      // ghost candidates: redirect them to the canonical Entity, or close the
+      // duplicate when the canonical Entity already has a candidate row for the
+      // same Mention.
+      const pendingForSource = transaction
+        .select({ id: resolutionCandidates.id, mentionId: resolutionCandidates.mentionId })
+        .from(resolutionCandidates)
+        .where(and(eq(resolutionCandidates.candidateEntityId, source.id), eq(resolutionCandidates.state, 'PENDING')))
+        .all()
+      for (const candidate of pendingForSource) {
+        const canonicalCandidate = transaction
+          .select({ id: resolutionCandidates.id })
+          .from(resolutionCandidates)
+          .where(
+            and(
+              eq(resolutionCandidates.mentionId, candidate.mentionId),
+              eq(resolutionCandidates.candidateEntityId, target.id)
+            )
+          )
+          .get()
+        if (canonicalCandidate === undefined) {
+          transaction
+            .update(resolutionCandidates)
+            .set({ candidateEntityId: target.id })
+            .where(eq(resolutionCandidates.id, candidate.id))
+            .run()
+        } else {
+          transaction
+            .update(resolutionCandidates)
+            .set({ state: 'REJECTED', resolvedAt: input.updatedAt })
+            .where(eq(resolutionCandidates.id, candidate.id))
+            .run()
+        }
+      }
+      // Hard Must-Link/Cannot-Link rules follow the identity: substitute the
+      // merged Entity with the canonical one so its constraints keep binding.
+      // The direct source-target pair becomes self-referential and is dropped,
+      // duplicates collapse onto the existing rule, and an opposite-type rule
+      // already on the canonical Entity aborts the merge instead of silently
+      // weakening a hard rule. The opposite-type probe runs first: the pair
+      // (target, X) may already hold both types, and deduplication must not
+      // mask that contradiction because Cannot-Link overrides Must-Link at
+      // scoring time.
+      const sourceConstraintRows = transaction
+        .select()
+        .from(entityConstraints)
+        .where(or(eq(entityConstraints.entityAId, source.id), eq(entityConstraints.entityBId, source.id)))
+        .all()
+      for (const constraint of sourceConstraintRows) {
+        const otherId = constraint.entityAId === source.id ? constraint.entityBId : constraint.entityAId
+        if (otherId === target.id) {
+          transaction.delete(entityConstraints).where(eq(entityConstraints.id, constraint.id)).run()
+          continue
+        }
+        const [entityAId, entityBId] = otherId < target.id ? [otherId, target.id] : [target.id, otherId]
+        const oppositeType = constraint.constraintType === 'CANNOT_LINK' ? 'MUST_LINK' : 'CANNOT_LINK'
+        const opposite = transaction
+          .select({ id: entityConstraints.id })
+          .from(entityConstraints)
+          .where(
+            and(
+              eq(entityConstraints.matterId, constraint.matterId),
+              eq(entityConstraints.entityAId, entityAId),
+              eq(entityConstraints.entityBId, entityBId),
+              eq(entityConstraints.constraintType, oppositeType)
+            )
+          )
+          .get()
+        if (opposite !== undefined) {
+          throw new Error('Merge would create contradictory hard constraints on the canonical Entity')
+        }
+        const sameType = transaction
+          .select({ id: entityConstraints.id })
+          .from(entityConstraints)
+          .where(
+            and(
+              eq(entityConstraints.matterId, constraint.matterId),
+              eq(entityConstraints.entityAId, entityAId),
+              eq(entityConstraints.entityBId, entityBId),
+              eq(entityConstraints.constraintType, constraint.constraintType)
+            )
+          )
+          .get()
+        if (sameType !== undefined) {
+          transaction.delete(entityConstraints).where(eq(entityConstraints.id, constraint.id)).run()
+          continue
+        }
+        transaction
+          .update(entityConstraints)
+          .set({ entityAId, entityBId })
+          .where(eq(entityConstraints.id, constraint.id))
+          .run()
+      }
+      transaction
+        .update(entities)
+        .set({ status: 'MERGED', mergedIntoEntityId: target.id, updatedAt: input.updatedAt })
+        .where(eq(entities.id, source.id))
+        .run()
+      transaction.update(entities).set({ updatedAt: input.updatedAt }).where(eq(entities.id, target.id)).run()
+      transaction.insert(resolutionEvents).values(toResolutionEventInsert(input.event)).run()
+      const merged = transaction.select().from(entities).where(eq(entities.id, source.id)).get()
+      if (merged === undefined) throw new Error('Merged Entity was not found')
+      return toEntity(merged)
+    })
+  }
+
+  createManualMention(input: CreateManualMentionInput): Mention {
+    assertMention(input.mention)
+    if (input.textCipher.length === 0 || input.mention.detector !== 'USER' || input.mention.entityId !== undefined) {
+      throw new Error('Manual Mention must be unassigned USER detection with encrypted text')
+    }
+    if (
+      input.event.type !== 'MENTION_CREATED' ||
+      input.event.mentionId !== input.mention.id ||
+      input.event.entityId !== undefined ||
+      input.event.matterId !== input.mention.matterId ||
+      input.event.actor !== 'USER'
+    ) {
+      throw new Error('Manual Mention event must identify the created Mention')
+    }
+    return this.db.transaction((transaction) => {
+      const block = transaction.select().from(documentBlocks).where(eq(documentBlocks.id, input.mention.blockId)).get()
+      const document = transaction.select().from(documents).where(eq(documents.id, input.mention.documentId)).get()
+      if (
+        block === undefined || document === undefined || block.documentId !== document.id ||
+        block.pageId !== input.mention.pageId || document.matterId !== input.mention.matterId
+      ) {
+        throw new Error('Manual Mention scope does not match its Document Block')
+      }
+      assertDocumentReviewMutable(document.parseStatus)
+      const overlapping = transaction
+        .select({ startOffset: mentions.startOffset, endOffset: mentions.endOffset })
+        .from(mentions)
+        // A rejected false positive must not block re-marking the correct span
+        // inside its range, so it leaves the overlap set.
+        .where(and(eq(mentions.blockId, input.mention.blockId), ne(mentions.reviewStatus, 'REJECTED')))
+        .all()
+        .some((existing) =>
+          existing.startOffset < input.mention.endOffset && existing.endOffset > input.mention.startOffset
+        )
+      if (overlapping) throw new Error('Manual Mention must not overlap an existing Mention')
+      if (input.protectedValue !== undefined) transaction.insert(protectedValues).values(toProtectedValueInsert(input.protectedValue)).run()
+      if (input.protectedValueTokenBackfill !== undefined) {
+        const backfill = transaction
+          .update(protectedValues)
+          .set({ publicToken: input.protectedValueTokenBackfill.publicToken })
+          .where(and(eq(protectedValues.id, input.protectedValueTokenBackfill.id), isNull(protectedValues.publicToken)))
+          .run()
+        if (backfill.changes !== 1) throw new Error('Manual Mention ProtectedValue token could not be backfilled')
+      }
+      transaction
+        .insert(mentions)
+        .values(toMentionInsert({ ...input.mention, textCipher: input.textCipher, fingerprint: input.fingerprint }))
+        .run()
+      transaction.insert(resolutionEvents).values(toResolutionEventInsert(input.event)).run()
+      const created = transaction.select().from(mentions).where(eq(mentions.id, input.mention.id)).get()
+      if (created === undefined) throw new Error('Created manual Mention was not found')
+      return toMention(created)
     })
   }
 
@@ -2041,9 +2430,24 @@ export class EntityResolutionRepository {
       .map(toEntityConstraint)
   }
 
-  findMentionById(mentionId: string): Mention | undefined {
+  findMentionById(mentionId: string): ResolutionMentionSource | undefined {
     const row = this.db.select().from(mentions).where(eq(mentions.id, mentionId)).get()
-    return row === undefined ? undefined : toMention(row)
+    return row === undefined ? undefined : toResolutionMentionSource(row)
+  }
+
+  findManualMentionBlock(blockId: string): ManualMentionBlockSource | undefined {
+    return this.db
+      .select({
+        id: documentBlocks.id,
+        matterId: documents.matterId,
+        documentId: documentBlocks.documentId,
+        pageId: documentBlocks.pageId,
+        textCipher: documentBlocks.textCipher
+      })
+      .from(documentBlocks)
+      .innerJoin(documents, eq(documents.id, documentBlocks.documentId))
+      .where(eq(documentBlocks.id, blockId))
+      .get()
   }
 
   private requireJob(id: string): ProcessingJob {
@@ -2141,7 +2545,7 @@ function toSanitizationMapping(row: SanitizationMappingRow): SanitizationMapping
     matterId: row.matterId,
     sanitizedDocumentId: row.sanitizedDocumentId,
     mentionId: row.mentionId,
-    entityId: row.entityId,
+    ...(row.entityId === null ? {} : { entityId: row.entityId }),
     publicToken: row.publicToken,
     alias: row.alias,
     restorePolicy: row.restorePolicy,
@@ -2279,7 +2683,7 @@ export class SanitizationRepository {
             and(eq(entityAliases.entityId, mentions.entityId), eq(entityAliases.isPrimary, true))
           )
           .leftJoin(protectedValues, eq(protectedValues.id, mentions.protectedValueId))
-          .where(eq(mentions.blockId, blockRow.id))
+          .where(and(eq(mentions.blockId, blockRow.id), ne(mentions.reviewStatus, 'REJECTED')))
           .orderBy(asc(mentions.startOffset), asc(mentions.id))
           .all()
         const block: SanitizationBlockSource = {
@@ -2386,9 +2790,10 @@ export class SanitizationRepository {
         throw new Error('Sanitization must produce exactly one SanitizedBlock per source Block')
       }
 
-      // Completeness and consistency: every source Mention must map exactly once,
-      // and each mapping must agree with the Mention's current Entity assignment,
-      // primary Alias, and ProtectedValue restoration token.
+      // Completeness and consistency: every source Mention must map exactly once.
+      // Entity-backed mappings agree with the active assignment and primary
+      // Alias; Entity-less mappings preserve value-level restoration without
+      // manufacturing an identity owner.
       const sourceMentions = transaction
         .select({
           id: mentions.id,
@@ -2404,7 +2809,7 @@ export class SanitizationRepository {
           and(eq(entityAliases.entityId, mentions.entityId), eq(entityAliases.isPrimary, true))
         )
         .leftJoin(protectedValues, eq(protectedValues.id, mentions.protectedValueId))
-        .where(eq(mentions.documentId, input.documentId))
+        .where(and(eq(mentions.documentId, input.documentId), ne(mentions.reviewStatus, 'REJECTED')))
         .all()
       const mappingByMentionId = new Map<string, SanitizationMapping>()
       for (const mapping of input.mappings) {
@@ -2422,12 +2827,18 @@ export class SanitizationRepository {
       for (const mention of sourceMentions) {
         const mapping = mappingByMentionId.get(mention.id)
         if (mapping === undefined) throw new Error('Sanitization mapping must cover every source Mention')
-        if (mapping.entityId !== mention.entityId) {
+        if ((mapping.entityId ?? null) !== mention.entityId) {
           throw new Error('Sanitization mapping Entity must match the Mention assignment')
         }
-        if (mention.entityStatus !== 'ACTIVE') throw new Error('Sanitization mapping Entity must be active')
-        if (mapping.alias !== mention.entityPrimaryAlias) {
-          throw new Error('Sanitization mapping Alias must match the Entity primary alias')
+        if (mention.entityId === null) {
+          if (mention.entityStatus !== null || mention.entityPrimaryAlias !== null) {
+            throw new Error('Entity-less sanitization mapping must not reference Entity metadata')
+          }
+        } else {
+          if (mention.entityStatus !== 'ACTIVE') throw new Error('Sanitization mapping Entity must be active')
+          if (mapping.alias !== mention.entityPrimaryAlias) {
+            throw new Error('Sanitization mapping Alias must match the Entity primary alias')
+          }
         }
         if (mapping.publicToken !== mention.protectedValuePublicToken) {
           throw new Error('Sanitization mapping token must match the ProtectedValue restoration token')
@@ -2452,7 +2863,10 @@ export class SanitizationRepository {
           .run()
       }
       if (input.mappings.length > 0) {
-        transaction.insert(sanitizationMappings).values(input.mappings.map((mapping) => ({ ...mapping }))).run()
+        transaction
+          .insert(sanitizationMappings)
+          .values(input.mappings.map((mapping) => ({ ...mapping, entityId: mapping.entityId ?? null })))
+          .run()
       }
       const jobResult = transaction
         .update(processingJobs)
@@ -2546,7 +2960,7 @@ export class SanitizationRepository {
       .orderBy(asc(mentions.startOffset), asc(sanitizationMappings.id))
       .all()
       .map(({ mapping, mentionEntityId, protectedValueId, protectedValuePublicToken, valueCipher }) => {
-        if (mentionEntityId !== mapping.entityId || protectedValuePublicToken !== mapping.publicToken) {
+        if (mentionEntityId !== (mapping.entityId ?? null) || protectedValuePublicToken !== mapping.publicToken) {
           throw new Error('Sanitization mapping no longer matches its immutable Mention assignment')
         }
         return {
@@ -2666,7 +3080,7 @@ export class AiExecutionRepository {
       .orderBy(asc(mentions.startOffset), asc(sanitizationMappings.id))
       .all()
       .map(({ mapping, mentionEntityId, protectedValueId, protectedValuePublicToken, valueCipher }) => {
-        if (mentionEntityId !== mapping.entityId || protectedValuePublicToken !== mapping.publicToken) {
+        if (mentionEntityId !== (mapping.entityId ?? null) || protectedValuePublicToken !== mapping.publicToken) {
           throw new Error('Sanitization mapping no longer matches its immutable Mention assignment')
         }
         return {
@@ -2680,9 +3094,16 @@ export class AiExecutionRepository {
     // in packages/application/src/ai-execution.ts) so an abnormal Matter is
     // detectable without paying an unbounded read.
     const matterDenylist = this.db
-      .select({ id: protectedValues.id, valueType: protectedValues.valueType, valueCipher: protectedValues.valueCipher })
+      .selectDistinct({ id: protectedValues.id, valueType: protectedValues.valueType, valueCipher: protectedValues.valueCipher })
       .from(protectedValues)
-      .where(eq(protectedValues.matterId, sanitizedDocument.matterId))
+      .leftJoin(mentions, eq(mentions.protectedValueId, protectedValues.id))
+      .leftJoin(entityProtectedValues, eq(entityProtectedValues.protectedValueId, protectedValues.id))
+      .where(
+        and(
+          eq(protectedValues.matterId, sanitizedDocument.matterId),
+          or(isNull(mentions.id), ne(mentions.reviewStatus, 'REJECTED'), isNotNull(entityProtectedValues.entityId))
+        )
+      )
       .limit(2049)
       .all()
 
@@ -2704,7 +3125,7 @@ export class AiExecutionRepository {
       internalIdentifiers.add(mapping.matterId)
       internalIdentifiers.add(mapping.sanitizedDocumentId)
       internalIdentifiers.add(mapping.mentionId)
-      internalIdentifiers.add(mapping.entityId)
+      if (mapping.entityId !== undefined) internalIdentifiers.add(mapping.entityId)
       internalIdentifiers.add(mapping.protectedValueId)
     }
     return { sanitizedDocument, blocks, mappings, matterDenylist, internalIdentifiers: [...internalIdentifiers] }

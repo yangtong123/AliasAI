@@ -29,7 +29,6 @@ import {
   PrivacyDetectionService,
   PseudonymizationService,
   RehydrationService,
-  ReviewOperationService,
   ReviewQueryService,
   SanitizedPreviewService,
   type ApplicationKeys
@@ -67,7 +66,6 @@ describe('review flow end to end', () => {
   let sqlite: SqliteClient
   let db: AliasAiDatabase
   let reviewQuery: ReviewQueryService
-  let operations: ReviewOperationService
   let preview: SanitizedPreviewService
   let resolution: EntityResolutionService
   let timestamp: number
@@ -90,7 +88,6 @@ describe('review flow end to end', () => {
       new EntityRepository(db),
       keys
     )
-    operations = new ReviewOperationService(resolution, reviewQuery)
     preview = new SanitizedPreviewService(
       new DocumentRepository(db),
       new ReviewQueryRepository(db),
@@ -110,7 +107,7 @@ describe('review flow end to end', () => {
 
   const now = () => timestamp++
 
-  it('runs PDF -> Block -> Mention -> Entity -> Sanitization -> Mock AI -> Rehydration', async () => {
+  it('runs PDF -> Block -> Mention -> value fallback -> Sanitization -> Mock AI -> Rehydration', async () => {
     // Import a synthetic PDF into a fresh Matter.
     const directory = await mkdtemp(join(tmpdir(), 'aliasai-review-e2e-'))
     directories.push(directory)
@@ -147,29 +144,13 @@ describe('review flow end to end', () => {
     const mentions = resolvedReview.blocks[0]!.mentions
     expect(mentions.map((mention) => mention.type).sort()).toEqual(['EMAIL', 'ID_CARD'])
     expect(mentions.every((mention) => mention.decisionStatus === 'UNRESOLVED')).toBe(true)
-    expect(resolvedReview.counts).toEqual({ mentions: 2, resolved: 0, needsReview: 0, unresolved: 2 })
+    expect(resolvedReview.counts).toEqual({ mentions: 2, resolved: 0, needsReview: 0, unresolved: 2, rejected: 0 })
 
-    // Preview is blocked until every mention resolves.
-    const blocked = preview.getPreview(imported.id)
-    expect(blocked.status).toBe('READY')
-    if (blocked.status === 'READY') {
-      expect(blocked.blockers).toHaveLength(2)
-      expect(blocked.blockers.every((blocker) => blocker.reason === 'UNRESOLVED')).toBe(true)
-    }
-
-    // The reviewer creates one entity for the holder and assigns both mentions.
-    const idMention = mentions.find((mention) => mention.type === 'ID_CARD')!
-    const emailMention = mentions.find((mention) => mention.type === 'EMAIL')!
-    const created = operations.createEntityAndAssign(idMention.mentionId, {
-      primaryAlias: 'Holder One',
-      entityType: 'PERSON'
-    })
-    const assigned = operations.assignToEntity(emailMention.mentionId, created.entity.id)
-
-    expect(created.mention.decisionStatus).toBe('USER_ASSIGNED')
-    expect(assigned.assignedEntity!.id).toBe(created.entity.id)
-    const finalReview = reviewQuery.getDocumentReview(imported.id)
-    expect(finalReview.counts).toEqual({ mentions: 2, resolved: 2, needsReview: 0, unresolved: 0 })
+    // No reliable owner is present, so preview uses value-level tokens without
+    // forcing the reviewer to manufacture a Person Entity.
+    const ready = preview.getPreview(imported.id)
+    expect(ready).toEqual({ status: 'READY', blockers: [] })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM entities').get()).toEqual({ count: 0 })
 
     // Generate the sanitized preview: pseudonyms replace both values.
     const generated = await preview.generatePreview(imported.id)
@@ -179,6 +160,8 @@ describe('review flow end to end', () => {
     expect(sanitized).not.toContain('110101199003077774')
     expect(sanitized).not.toContain('synthetic@example.test')
     expect(sanitized.match(/〔@[IET]-[A-Z0-9]+〕/g)).toHaveLength(2)
+    expect(sanitized).toContain('身份证号〔@I-')
+    expect(sanitized).toContain('邮箱〔@E-')
     expect('mappings' in generated).toBe(false)
 
     // The provider receives one string containing only the persisted sanitized

@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { decrypt, deriveMatterSearchKey, encrypt, fingerprintNormalizedValue, generatePublicToken } from '@aliasai/crypto'
 import type { Entity, EntityType, MentionStrength, MentionType, ProcessingJob, ProtectedValueType } from '@aliasai/domain'
-import type { MentionProposal, PrivacyDetector } from '@aliasai/privacy-detection'
+import { RuleBasedPrivacyDetector, type MentionProposal, type PrivacyDetector } from '@aliasai/privacy-detection'
 import {
   DocumentRepository,
   EntityRepository,
@@ -13,6 +13,7 @@ import {
   MatterRepository,
   PrivacyDetectionRepository,
   ProtectedValueRepository,
+  SanitizationRepository,
   migrateDatabase,
   openDatabase,
   type AliasAiDatabase,
@@ -26,10 +27,12 @@ import {
   EntityResolutionService,
   MatterService,
   PrivacyDetectionService,
+  PseudonymizationService,
   documentBlockTextContext,
   privacyDetectionErrorContext,
   protectedValueContext,
   resolutionEventContext,
+  sanitizedBlockTextContext,
   type ApplicationKeys
 } from '../src/index'
 
@@ -42,6 +45,35 @@ function syntheticPdf(text: string): Buffer {
     '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 120] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
     `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
+  ]
+  let output = '%PDF-1.4\n'
+  const offsets = [0]
+  for (const [index, value] of objects.entries()) {
+    offsets.push(Buffer.byteLength(output))
+    output += `${index + 1} 0 obj\n${value}\nendobj\n`
+  }
+  const xrefOffset = Buffer.byteLength(output)
+  output += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+  output += offsets.slice(1).map((offset) => `${offset.toString().padStart(10, '0')} 00000 n \n`).join('')
+  output += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`
+  return Buffer.from(output, 'ascii')
+}
+
+function syntheticChinesePdf(text: string): Buffer {
+  const utf16 = Buffer.from(text, 'utf16le')
+  for (let index = 0; index < utf16.length; index += 2) {
+    const first = utf16[index]!
+    utf16[index] = utf16[index + 1]!
+    utf16[index + 1] = first
+  }
+  const content = `BT /F1 10 Tf 18 84 Td <FEFF${utf16.toString('hex').toUpperCase()}> Tj ET`
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 700 120] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+    `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`,
+    '<< /Type /Font /Subtype /Type0 /BaseFont /STSong-Light /Encoding /UniGB-UCS2-H /DescendantFonts [6 0 R] >>',
+    '<< /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> >>'
   ]
   let output = '%PDF-1.4\n'
   const offsets = [0]
@@ -352,10 +384,90 @@ describe('EntityResolutionService', () => {
     expect(JSON.parse(payload)).toEqual({
       decision: 'NEW_ENTITY',
       candidateEntityId: entityRow.id,
-      algorithmVersion: 'er-v1'
+      algorithmVersion: 'er-v2'
     })
     expect(payload).not.toContain('Synthetic Person Alpha')
     expect(query('SELECT COUNT(*) AS count FROM resolution_candidates')).toEqual([{ count: 0 }])
+  })
+
+  it('creates contract parties and assigns labeled identifiers without manual Entity creation', async () => {
+    const contractLine =
+      '出租方：湖北众创科技孵化园有限公司 授权代表：喻越 身份证号：421022199406233911 手机：18923414607'
+    const { documentId } = seedParsedDocument([contractLine])
+    await runDetection(documentId, new RuleBasedPrivacyDetector())
+
+    const result = await makeService().resolve(documentId)
+
+    expect(result.decisions.map((decision) => decision.decision)).toEqual([
+      'NEW_ENTITY',
+      'NEW_ENTITY',
+      'AUTO_LINK',
+      'AUTO_LINK'
+    ])
+    const mentionRows = query(
+      'SELECT mention_type, entity_id FROM mentions WHERE document_id = ? ORDER BY start_offset',
+      documentId
+    ) as Array<{ mention_type: MentionType; entity_id: string | null }>
+    expect(mentionRows.map((row) => row.mention_type)).toEqual(['ORGANIZATION', 'PERSON', 'ID_CARD', 'PHONE'])
+    const organizationEntityId = mentionRows[0]!.entity_id
+    const personEntityId = mentionRows[1]!.entity_id
+    expect(organizationEntityId).not.toBeNull()
+    expect(personEntityId).not.toBeNull()
+    expect(organizationEntityId).not.toBe(personEntityId)
+    expect(mentionRows[2]!.entity_id).toBe(personEntityId)
+    expect(mentionRows[3]!.entity_id).toBe(personEntityId)
+
+    expect(
+      query(
+        "SELECT evidence_type, score FROM resolution_evidence WHERE evidence_type = 'SAME_LABELED_FIELD_GROUP' ORDER BY id"
+      )
+    ).toEqual([
+      { evidence_type: 'SAME_LABELED_FIELD_GROUP', score: 100 },
+      { evidence_type: 'SAME_LABELED_FIELD_GROUP', score: 100 }
+    ])
+    expect(query('SELECT COUNT(*) AS count FROM entities')).toEqual([{ count: 2 }])
+    expect(query('SELECT event_type, actor FROM resolution_events ORDER BY created_at, id')).toEqual([
+      { event_type: 'ENTITY_CREATED', actor: 'SYSTEM' },
+      { event_type: 'MENTION_ASSIGNED', actor: 'SYSTEM' },
+      { event_type: 'ENTITY_CREATED', actor: 'SYSTEM' },
+      { event_type: 'MENTION_ASSIGNED', actor: 'SYSTEM' },
+      { event_type: 'MENTION_ASSIGNED', actor: 'SYSTEM' },
+      { event_type: 'MENTION_ASSIGNED', actor: 'SYSTEM' }
+    ])
+  })
+
+  it('merges labeled-field context evidence into an already-scored candidate', async () => {
+    const contractLine = '授权代表：张三 电话：13800138000'
+    const { documentId, matterId } = seedParsedDocument([contractLine])
+    const holder = seedEntity(matterId, 'PERSON', 'Holder Alias')
+    const phoneValueId = seedProtectedValue(matterId, 'PHONE', 'PHONE', '13800138000')
+    linkEntityProtectedValue(matterId, holder.id, phoneValueId)
+    await runDetection(
+      documentId,
+      detectorFor([
+        { type: 'PERSON', text: '张三' },
+        { type: 'PHONE', text: '13800138000' }
+      ])
+    )
+    sqlite
+      .prepare(`UPDATE mentions SET entity_id = ? WHERE document_id = ? AND mention_type = 'PERSON'`)
+      .run(holder.id, documentId)
+
+    const result = await makeService().resolve(documentId)
+
+    // The phone both shares its ProtectedValue with the holder (SAME_PHONE 40)
+    // and sits in the holder's labeled field group (100): additive evidence on
+    // one candidate auto-links instead of dropping the context explanation.
+    expect(result.decisions).toEqual([
+      { mentionId: expect.any(String), decision: 'AUTO_LINK', candidateEntityId: holder.id }
+    ])
+    expect(query('SELECT candidate_entity_id, score, state FROM resolution_candidates')).toEqual([
+      { candidate_entity_id: holder.id, score: 140, state: 'ACCEPTED' }
+    ])
+    expect(query('SELECT evidence_type, weight, score FROM resolution_evidence ORDER BY id')).toEqual([
+      { evidence_type: 'SAME_PHONE', weight: 40, score: 40 },
+      { evidence_type: 'SAME_LABELED_FIELD_GROUP', weight: 100, score: 100 }
+    ])
   })
 
   it('backfills a restoration token for a pre-existing tokenless ProtectedValue', async () => {
@@ -413,7 +525,7 @@ describe('EntityResolutionService', () => {
       candidate_entity_id: entity.id,
       score: 40,
       state: 'ACCEPTED',
-      algorithm_version: 'er-v1'
+      algorithm_version: 'er-v2'
     })
     expect(candidateRows[0]!.resolved_at).toBe(result.job.finishedAt)
     expect(query('SELECT evidence_type, weight, score FROM resolution_evidence WHERE candidate_id = ?', candidateRows[0]!.id)).toEqual([
@@ -429,7 +541,7 @@ describe('EntityResolutionService', () => {
     expect(eventRows).toHaveLength(1)
     expect(eventRows[0]).toMatchObject({ event_type: 'MENTION_ASSIGNED', actor: 'SYSTEM' })
     const payload = decrypt(eventRows[0]!.payload_cipher, persistenceKey, resolutionEventContext(eventRows[0]!.id)).toString()
-    expect(JSON.parse(payload)).toEqual({ decision: 'AUTO_LINK', candidateEntityId: entity.id, algorithmVersion: 'er-v1' })
+    expect(JSON.parse(payload)).toEqual({ decision: 'AUTO_LINK', candidateEntityId: entity.id, algorithmVersion: 'er-v2' })
     expect(payload).not.toContain('110101199003077774')
   })
 
@@ -939,5 +1051,59 @@ describe('EntityResolutionService', () => {
     expect(query('SELECT mention_type, entity_id FROM mentions WHERE document_id = ?', imported.id)).toEqual([
       { mention_type: 'ID_CARD', entity_id: entity.id }
     ])
+  })
+
+  it('runs a Chinese contract PDF to automatic parties and labeled value ownership', async () => {
+    const contractLine =
+      '出租方：湖北众创科技孵化园有限公司 授权代表：喻越 身份证号：421022199406233911 手机：18923414607'
+    const matterId = createMatter('Chinese Contract E2E Matter')
+    const directory = await mkdtemp(join(tmpdir(), 'aliasai-chinese-contract-e2e-'))
+    directories.push(directory)
+    const sourcePath = join(directory, 'contract.pdf')
+    await writeFile(sourcePath, syntheticChinesePdf(contractLine))
+    const imported = await new DocumentImportService(documents, { persistenceKey }, now).importFromPath(matterId, sourcePath)
+    const virtualEnvironmentPython = resolve(process.cwd(), '.venv/bin/python')
+    const processor = new PythonWorkerDocumentProcessor(
+      'NATIVE_PDF',
+      new PythonWorkerClient({
+        command: existsSync(virtualEnvironmentPython) ? virtualEnvironmentPython : 'python3',
+        args: [resolve(process.cwd(), 'python/document_parser/native_worker.py')]
+      })
+    )
+    processors.push(processor)
+
+    await new DocumentProcessingService(documents, processor, { persistenceKey }, now).process(imported.id)
+    await new PrivacyDetectionService(detection, { persistenceKey }, undefined, now, generateId).detect(imported.id)
+    await makeService().resolve(imported.id)
+
+    const mentionRows = query(
+      'SELECT mention_type, entity_id FROM mentions WHERE document_id = ? ORDER BY start_offset',
+      imported.id
+    ) as Array<{ mention_type: MentionType; entity_id: string | null }>
+    expect(mentionRows.map((mention) => mention.mention_type)).toEqual(['ORGANIZATION', 'PERSON', 'ID_CARD', 'PHONE'])
+    expect(mentionRows[0]!.entity_id).not.toBe(mentionRows[1]!.entity_id)
+    expect(mentionRows[2]!.entity_id).toBe(mentionRows[1]!.entity_id)
+    expect(mentionRows[3]!.entity_id).toBe(mentionRows[1]!.entity_id)
+    expect(query('SELECT COUNT(*) AS count FROM entities WHERE matter_id = ?', matterId)).toEqual([{ count: 2 }])
+
+    const sanitized = await new PseudonymizationService(
+      new SanitizationRepository(db),
+      keys,
+      now,
+      generateId
+    ).sanitize(imported.id)
+    const sanitizedRow = query(
+      'SELECT id, text_cipher FROM sanitized_blocks WHERE sanitized_document_id = ?',
+      sanitized.sanitizedDocument.id
+    ) as Array<{ id: string; text_cipher: Buffer }>
+    const sanitizedText = decrypt(
+      sanitizedRow[0]!.text_cipher,
+      persistenceKey,
+      sanitizedBlockTextContext(sanitizedRow[0]!.id)
+    ).toString()
+    for (const plaintext of ['湖北众创科技孵化园有限公司', '喻越', '421022199406233911', '18923414607']) {
+      expect(sanitizedText).not.toContain(plaintext)
+    }
+    expect(sanitizedText.match(/〔@[A-Z]-[A-Z0-9]+〕/g)).toHaveLength(4)
   })
 })

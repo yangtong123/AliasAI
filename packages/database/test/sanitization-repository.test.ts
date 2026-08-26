@@ -763,6 +763,17 @@ describe('SanitizationRepository', () => {
       expect(source?.matterDenylist.every((denied) => denied.valueType === 'PERSON_NAME')).toBe(true)
     })
 
+    it('omits a value supported only by rejected Mentions from the outbound denylist', () => {
+      seedReadyDocument('document-other')
+      sqlite.prepare("UPDATE mentions SET review_status = 'REJECTED', entity_id = NULL WHERE document_id = 'document-other'").run()
+      sqlite.prepare("DELETE FROM entity_protected_values WHERE protected_value_id = 'pv-a-document-other'").run()
+      const sanitizedDocumentId = seedAiSource()
+
+      expect(aiExecutions.findSource(sanitizedDocumentId)!.matterDenylist.map((denied) => denied.id)).not.toContain(
+        'pv-a-document-other'
+      )
+    })
+
     it('caps the Matter denylist read at one row past the application limit', () => {
       const sanitizedDocumentId = seedAiSource()
       const insert = sqlite.prepare(

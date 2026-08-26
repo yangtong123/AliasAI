@@ -64,7 +64,11 @@ describe('database migration upgrades', () => {
       ).toEqual({ name: 'ai_executions' })
       expect(
         upgraded.sqlite.prepare('SELECT count(*) AS count FROM __drizzle_migrations').get()
-      ).toEqual({ count: 5 })
+      ).toEqual({ count: 6 })
+      expect(
+        (upgraded.sqlite.prepare("PRAGMA table_info('sanitization_mappings')").all() as Array<{ name: string; notnull: number }>)
+          .find((column) => column.name === 'entity_id')
+      ).toMatchObject({ name: 'entity_id', notnull: 0 })
     } finally {
       upgraded.sqlite.close()
     }

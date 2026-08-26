@@ -10,6 +10,7 @@ function Harness() {
       <p>{t('matters.title')}</p>
       <p>{label('ID_CARD')}</p>
       <p>{label('SHARED_PROTECTED_VALUE')}</p>
+      <p>{label('SAME_LABELED_FIELD_GROUP')}</p>
       <p>{formatError({ code: 'DOCUMENT_NOT_FOUND', message: 'Document was not found' })}</p>
       <button type="button" onClick={() => setLocale(locale === 'zh-CN' ? 'en' : 'zh-CN')}>
         {t('language.switch')}
@@ -36,6 +37,7 @@ describe('renderer internationalization', () => {
     expect(screen.getByText('事项')).toBeDefined()
     expect(screen.getByText('身份证号')).toBeDefined()
     expect(screen.getByText('受保护值相同')).toBeDefined()
+    expect(screen.getByText('同标签字段组')).toBeDefined()
     expect(screen.getByText('未找到该文档。')).toBeDefined()
     expect(document.documentElement.lang).toBe('zh-CN')
   })
@@ -51,6 +53,7 @@ describe('renderer internationalization', () => {
     await user.click(screen.getByRole('button', { name: '切换语言' }))
     expect(screen.getByText('Matters')).toBeDefined()
     expect(screen.getByText('ID card number')).toBeDefined()
+    expect(screen.getByText('Labeled field group')).toBeDefined()
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe('en')
     expect(document.documentElement.lang).toBe('en')
 

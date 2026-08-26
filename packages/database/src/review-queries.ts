@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm'
 import type {
   BlockType,
   Document,
@@ -243,7 +243,7 @@ export class ReviewQueryRepository {
       .leftJoin(entities, eq(entities.id, mentions.entityId))
       .leftJoin(entityAliases, and(eq(entityAliases.entityId, mentions.entityId), eq(entityAliases.isPrimary, true)))
       .leftJoin(protectedValues, eq(protectedValues.id, mentions.protectedValueId))
-      .where(eq(mentions.documentId, documentId))
+      .where(and(eq(mentions.documentId, documentId), ne(mentions.reviewStatus, 'REJECTED')))
       .orderBy(asc(mentions.startOffset), asc(mentions.id))
       .all()
       .map((row) => ({

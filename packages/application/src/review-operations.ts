@@ -1,4 +1,4 @@
-import type { EntityType } from '@aliasai/domain'
+import type { EntityType, MentionType } from '@aliasai/domain'
 import type { ConstraintDTO, EntitySummaryDTO, MentionReviewDTO, ReviewQueryService } from './review-read'
 import type { EntityResolutionService } from './index'
 
@@ -66,6 +66,39 @@ export class ReviewOperationService {
       throw new ReviewOperationError('ASSIGNMENT_FAILED', 'Newly created Entity was not assigned to the Mention')
     }
     return { mention: refreshed, entity }
+  }
+
+  renameEntity(entityId: string, primaryAlias: string): { readonly renamed: true } {
+    this.resolution.renameEntity(entityId, primaryAlias)
+    return { renamed: true }
+  }
+
+  rejectMention(mentionId: string): MentionReviewDTO {
+    this.resolution.reject(mentionId)
+    return this.requireMention(mentionId)
+  }
+
+  mergeEntities(sourceEntityId: string, targetEntityId: string): { readonly merged: true } {
+    this.resolution.merge(sourceEntityId, targetEntityId)
+    return { merged: true }
+  }
+
+  splitMention(
+    mentionId: string,
+    primaryAlias: string
+  ): { readonly mention: MentionReviewDTO; readonly entityId: string } {
+    const split = this.resolution.splitMention(mentionId, primaryAlias)
+    return { mention: this.requireMention(mentionId), entityId: split.entity.id }
+  }
+
+  createManualMention(input: {
+    readonly blockId: string
+    readonly type: MentionType
+    readonly startOffset: number
+    readonly endOffset: number
+  }): MentionReviewDTO {
+    const created = this.resolution.createManualMention(input)
+    return this.requireMention(created.id)
   }
 
   markConstraint(

@@ -59,8 +59,11 @@ Layering and boundary rules:
   text (matter/document names, block text, mention text) by design, but never
   ciphers, keys, or file paths. Decision status is derived at read time from the
   latest assignment event's actor (AUTO_LINKED vs USER_ASSIGNED) plus candidate
-  state (NEEDS_REVIEW/UNRESOLVED). Preview blockers mirror the sanitization
-  fail-closed predicates exactly. Confirming an assignment writes a USER
+  state (NEEDS_REVIEW/UNRESOLVED/REJECTED). The result-first UI opens on the
+  system proposal; users correct exceptions through rename, reassign, reject,
+  manual Mention, merge, and split operations. Each correction writes a USER
+  ResolutionEvent in the same transaction as its state change. Preview blockers
+  mirror the sanitization fail-closed predicates exactly. Confirming an assignment writes a USER
   ENTITY_CONFIRMED event and marks the Mention CONFIRMED; reassignment resets
   the Mention to UNREVIEWED so a later confirmation always binds to the
   current Entity, and confirming the same assignment twice records exactly
@@ -261,9 +264,12 @@ Mapping Vault  -> RehydrationService (Public Token anchored, policy-filtered)
               -> local real-identity text
 ```
 
-Pseudonymization is fail-closed: any Mention without a resolved Entity and a
-restoration token aborts the SANITIZE job, so no sendable artifact can be produced
-from partially resolved input. The Mapping Vault stores only pseudonym metadata
+Pseudonymization requires a restoration token for every accepted supported Mention.
+When reliable ownership exists it emits the Entity Alias; otherwise it uses a
+type-level value alias such as `身份证号` without manufacturing an Entity. Rejected
+false positives are omitted by explicit user decision. Missing tokens, unsupported
+types, overlaps, invalid ranges, and invalid Entity assignments remain fail-closed.
+The Mapping Vault stores only pseudonym metadata
 (restoration token, alias, effective restore policy); real values stay encrypted
 and are resolved lazily during local rehydration.
 

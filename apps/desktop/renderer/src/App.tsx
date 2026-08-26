@@ -39,11 +39,13 @@ export function App() {
     localStorage.setItem(LAST_MATTER_KEY, id)
     restoredDocumentIdRef.current = null
     setDocumentId(null)
+    setSelectedMentionId(null)
     localStorage.removeItem(LAST_DOCUMENT_KEY)
   }
 
   const onSelectDocument = (id: string) => {
     setDocumentId(id)
+    setSelectedMentionId(null)
     restoredDocumentIdRef.current = null
     localStorage.setItem(LAST_DOCUMENT_KEY, id)
     setRefreshKey((value) => value + 1)

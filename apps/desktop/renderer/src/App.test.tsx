@@ -146,8 +146,10 @@ describe('App settings navigation lock', () => {
 
     resolveSave({ ok: true, data: { provider: 'openai-compatible', openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-other', apiKeyConfigured: true }, configErrorCode: null } })
     await screen.findByText('Provider settings saved.')
-    expect(screen.getByRole('button', { name: 'Settings' })).toHaveProperty('disabled', false)
-    expect(screen.getByRole('button', { name: 'Back to workspace' })).toHaveProperty('disabled', false)
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Settings' })).toHaveProperty('disabled', false)
+      expect(screen.getByRole('button', { name: 'Back to workspace' })).toHaveProperty('disabled', false)
+    })
   })
 })
 
@@ -169,7 +171,7 @@ function installWorkspaceMock(
         blocks: [],
         entities: [],
         constraints: [],
-        counts: { mentions: 0, resolved: 0, needsReview: 0, unresolved: 0 },
+        counts: { mentions: 0, resolved: 0, needsReview: 0, unresolved: 0, rejected: 0 },
         jobs: []
       }
       return Promise.resolve({ ok: true, data: review })

@@ -118,7 +118,7 @@ describe('ReviewQueryService', () => {
     // Phone mention: no entity and no candidates.
     expect(block.mentions[2]).toMatchObject({ decisionStatus: 'UNRESOLVED' })
     expect(block.mentions[2]!.candidates).toEqual([])
-    expect(reviewDto.counts).toEqual({ mentions: 3, resolved: 1, needsReview: 1, unresolved: 1 })
+    expect(reviewDto.counts).toEqual({ mentions: 3, resolved: 1, needsReview: 1, unresolved: 1, rejected: 0 })
     expect(reviewDto.entities.map((entity) => entity.primaryAlias)).toEqual(['Holder One'])
     expect(reviewDto.jobs.map((job) => job.type)).toContain('DETECT')
     expect(reviewDto.jobs.map((job) => job.type)).toContain('RESOLVE')

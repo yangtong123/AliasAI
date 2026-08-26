@@ -244,7 +244,7 @@ export function assertSanitizationMapping(value: SanitizationMapping): void {
   requireIdentifier(value.matterId, 'sanitizationMapping.matterId')
   requireIdentifier(value.sanitizedDocumentId, 'sanitizationMapping.sanitizedDocumentId')
   requireIdentifier(value.mentionId, 'sanitizationMapping.mentionId')
-  requireIdentifier(value.entityId, 'sanitizationMapping.entityId')
+  if (value.entityId !== undefined) requireIdentifier(value.entityId, 'sanitizationMapping.entityId')
   requireIdentifier(value.publicToken, 'sanitizationMapping.publicToken')
   requireIdentifier(value.alias, 'sanitizationMapping.alias')
   if (!RESTORE_POLICIES.has(value.restorePolicy)) {

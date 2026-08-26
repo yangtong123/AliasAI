@@ -453,12 +453,14 @@ The implemented V1 workflow deliberately covers only the deterministic core:
 - **Type coverage**: PERSON, ORGANIZATION, PHONE, EMAIL, ID_CARD, BANK_ACCOUNT, and
   ADDRESS Mentions map to ProtectedValue types. CASE_NUMBER, CONTRACT_NUMBER, COURT,
   LAWYER, and JUDGE are metadata Mentions in V1: no ProtectedValue, no candidates.
-- **Candidates and evidence** (`algorithm_version = "er-v1"`): shared ProtectedValue
+- **Candidates and evidence** (`algorithm_version = "er-v2"`): shared ProtectedValue
   by fingerprint (SAME_ID_CARD 40 with hard MUST_LINK; SAME_PHONE/SAME_EMAIL/
   SAME_BANK_ACCOUNT 40 as strong evidence only), exact normalized primary-alias or
   name-ProtectedValue fingerprint match (NAME_EXACT 25), conflicting ID_CARD
   (CONFLICTING_ID_CARD, hard CANNOT_LINK), explicit user CANNOT_LINK constraints
-  (hard CANNOT_LINK), and explicit user MUST_LINK constraints (hard MUST_LINK).
+  (hard CANNOT_LINK), explicit user MUST_LINK constraints (hard MUST_LINK), and
+  high-precision SAME_LABELED_FIELD_GROUP evidence (100) when an identifier has
+  its own field label inside the scope of an explicitly labeled person or organization.
   Hard-rule evaluation order follows the documented pipeline: user CANNOT_LINK,
   then hard identity conflict, then MUST_LINK, then soft scoring — a conflict
   overrides every Must-Link. A conflict requires an actual validated ID_CARD in
@@ -483,9 +485,15 @@ The implemented V1 workflow deliberately covers only the deterministic core:
   neither the Mention plaintext, nor the Entity Public Token, nor the internal
   Entity ID: `entity_aliases.alias` is a plaintext Matter-unique column, and the
   Entity Public Token is an identity anchor that must never appear inside the alias.
+- **User-entered aliases** (create, rename, split) are safety-checked
+  matter-wide: an Alias is the visible replacement text in sanitized artifacts,
+  so the application rejects with `UNSAFE_ALIAS` any alias equal to the current
+  Mention plaintext or whose normalized form fingerprints to any ProtectedValue
+  in the Matter under any value class — including values owned by other
+  Entities.
 
-Context extraction, OCR-aware similarity, role/relationship features, and the V2
-model path remain unimplemented.
+OCR-aware similarity and learned role/relationship features remain future work;
+V1 now includes deterministic labeled-field context extraction before that model path.
 
 ## V2 Model Path
 

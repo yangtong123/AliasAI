@@ -533,9 +533,7 @@ export const sanitizationMappings = sqliteTable(
     mentionId: text('mention_id')
       .notNull()
       .references(() => mentions.id),
-    entityId: text('entity_id')
-      .notNull()
-      .references(() => entities.id),
+    entityId: text('entity_id').references(() => entities.id),
     publicToken: text('public_token').notNull(),
     alias: text('alias').notNull(),
     restorePolicy: text('restore_policy').$type<RestorePolicy>().notNull(),

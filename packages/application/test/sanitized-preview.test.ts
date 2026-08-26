@@ -72,7 +72,7 @@ describe('SanitizedPreviewService', () => {
     expect(result.status).toBe('READY')
     if (result.status !== 'READY') return
     expect(result.blockers).toEqual([
-      { mentionId: 'mention-1', reason: 'UNRESOLVED' },
+      { mentionId: 'mention-1', reason: 'MISSING_TOKEN' },
       { mentionId: 'mention-2', reason: 'MISSING_TOKEN' }
     ])
   })
