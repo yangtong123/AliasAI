@@ -128,6 +128,39 @@ the retry action from the latest failed job (parse, detect, or resolve), while
 SANITIZE retry remains in the preview workflow. Re-importing the same unchanged
 PDF into the same Matter is idempotent by Matter + SHA-256 fingerprint.
 
+### Workspace lifecycle (trash and restore)
+
+Deletion is recoverable, never physical. Trashing a Matter flips
+`matters.status` to `DELETED` without touching any child row; trashing a
+Document sets `documents.deleted_at`. Both restore symmetrically.
+
+- **Read filtering**: normal read paths (`ReviewQueryRepository.listMatters` /
+  `listDocumentsByMatter`, import deduplication, and every processing,
+  detection, resolution, sanitization, preview, and AI start gate) exclude
+  trashed Documents and deleted Matters. A dedicated trash read path
+  (`WorkspaceLifecycleRepository.listTrash` → `WorkspaceLifecycleService`
+  DTOs) returns only trashed items with decrypted display names. Historical
+  reads stay available to rehydration and audit through explicitly named
+  internal methods (`DocumentRepository.findById`); no single method sometimes
+  filters and sometimes retains deleted data.
+- **Lifecycle transaction boundary**: every trash/restore is one SQLite
+  transaction inside `WorkspaceLifecycleRepository` — validate scope, reject
+  running ProcessingJobs/AiExecutions, flip the lifecycle state, and append
+  exactly one user-authored `workspace_events` row (append-only, like
+  resolution events). Idempotent no-ops change nothing and append nothing.
+  Restoring a Document checks for an active same-hash conflict first and
+  converts a concurrent partial-index collision into `RESTORE_CONFLICT`, so no
+  partial state or event survives a failed restore.
+- **Same-file re-import**: uniqueness is a partial index on
+  `(matter_id, file_hash) WHERE deleted_at IS NULL`. A trashed Document never
+  blocks importing the same file as a new active Document with a new ID;
+  active duplicates remain idempotent. File names never participate in
+  uniqueness.
+- **What trash never touches**: Entity IDs, Public Tokens, ProtectedValues,
+  sanitization mappings, sanitized artifacts, and AI execution history are
+  unchanged, so a restored (or still-trashed) artifact keeps rehydrating
+  locally. Permanent deletion and retention are deliberately out of scope.
+
 Known V1 limitations (deliberate):
 
 - The Python worker resolves through one interface with three tiers: env

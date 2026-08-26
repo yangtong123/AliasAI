@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Recoverable trash for Matters and Documents: per-item trash buttons with
+  confirmation on the workspace lists, a dedicated Trash view with restore
+  actions, and idempotent append-only `workspace_events` audit. Trashing never
+  alters Entity IDs, Public Tokens, ProtectedValues, mappings, sanitized
+  artifacts, or AI execution history; a Document trashed before its Matter
+  stays trashed after the Matter is restored.
+- Same-file re-import after trash: document uniqueness is now a partial index
+  on `(matter_id, file_hash)` over active Documents only, so a trashed copy
+  never blocks importing the identical file as a new Document with a new ID;
+  active duplicate imports remain idempotent and file names never participate
+  in uniqueness.
+- Running work (PENDING/RUNNING ProcessingJobs, RUNNING AI executions) blocks
+  trash with a coded `DOCUMENT_BUSY` error; restoring over an active same-hash
+  Document fails atomically with `RESTORE_CONFLICT` and no partial writes.
+- Normal lists and the processing/detection/resolution/sanitization/preview/AI
+  start paths exclude trashed Documents and deleted Matters; historical reads
+  for local rehydration and audit remain available through explicitly named
+  internal repository methods.
 - Add a real OpenAI-compatible AI provider behind the existing narrow provider
   port (chat completions, HTTPS-or-loopback only, no redirects, bounded
   120s timeout, cooperative cancellation, 5 MiB response ceiling, strict

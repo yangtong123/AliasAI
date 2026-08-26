@@ -48,7 +48,21 @@ Use synthetic or disposable documents only during RC testing.
    restored response is intentionally allowed only after an explicit click;
    the warning means that sensitive plaintext is leaving AliasAI's encrypted
    store for the clipboard or selected text file.
-9. Quit and reopen. The last valid Matter and Document selection should be
+9. Trash and restore. On the Matter and Document lists, each item has a
+   移入回收站 (move to trash) button with a confirmation step: a Matter warns
+   that all of its contents will disappear from the workspace, a Document
+   warns that it stays recoverable. After trashing, the item disappears from
+   the normal lists immediately; if it was selected, the selection is cleared.
+   Open 回收站 (Trash) from the header: deleted Matters and individually
+   deleted Documents are listed with a 恢复 (restore) action. Restoring a
+   Matter makes its previous Documents visible again (a Document trashed
+   before the Matter stays trashed). Re-importing the identical PDF of a
+   trashed Document must create a new Document with a new identity; the old
+   copy remains in trash and its sanitized artifact can still rehydrate
+   locally after restore. Restoring while an active copy with the same content
+   exists must show an actionable conflict message. Trashing an item with a
+   running pipeline stage or AI execution is rejected with a busy message.
+10. Quit and reopen. The last valid Matter and Document selection should be
    restored; persisted results and the configured AI provider (including the
    stored key) remain available.
 
@@ -66,6 +80,12 @@ then completes the entire acceptance workflow through the Chinese interface.
   retry from the displayed stage. Completed encrypted data is retained.
 - A changed source file is rejected before parse commit. Re-import the changed
   file to create a new Document identity.
+- Trashing a Document while a pipeline stage or AI execution is running fails
+  with `DOCUMENT_BUSY`; wait for it to finish, then retry. Nothing is partially
+  trashed. Same-name files with different content are never rejected for their
+  name.
+- Permanent physical deletion, trash retention, and key destruction are not
+  supported in this release; trash is recoverable only.
 - Startup failures such as `PYTHON_RUNTIME_UNAVAILABLE` indicate an incomplete
   installation. Reinstall the package; the app never falls back to a system
   Python or repository path.
