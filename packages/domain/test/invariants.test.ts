@@ -281,6 +281,16 @@ describe('domain invariants', () => {
     )
   })
 
+  it('accepts version lineage and rejects a self-reference', () => {
+    expect(() => assertDocument({ ...document, supersedesDocumentId: 'document-0' })).not.toThrow()
+    expect(() => assertDocument({ ...document, supersedesDocumentId: 'document-1' })).toThrow(
+      'document.supersedesDocumentId cannot reference itself'
+    )
+    expect(() => assertDocument({ ...document, supersedesDocumentId: ' ' })).toThrow(
+      'document.supersedesDocumentId must not be empty'
+    )
+  })
+
   it('rejects workspace events with an invalid target shape', () => {
     expect(() =>
       assertWorkspaceEvent({ id: 'event-1', matterId: 'matter-1', type: 'MATTER_TRASHED', actor: 'USER', createdAt: 1 })
@@ -332,6 +342,65 @@ describe('domain invariants', () => {
     expect(() =>
       assertWorkspaceEvent({ id: '', matterId: 'matter-1', type: 'MATTER_TRASHED', actor: 'USER', createdAt: 1 })
     ).toThrow('workspaceEvent.id must not be empty')
+  })
+
+  it('requires replacement events to link both lineage IDs', () => {
+    expect(() =>
+      assertWorkspaceEvent({
+        id: 'event-1',
+        matterId: 'matter-1',
+        type: 'DOCUMENT_REPLACED',
+        documentId: 'document-new',
+        supersededDocumentId: 'document-old',
+        actor: 'USER',
+        createdAt: 1
+      })
+    ).not.toThrow()
+    // Missing either side of the lineage is invalid.
+    expect(() =>
+      assertWorkspaceEvent({
+        id: 'event-1',
+        matterId: 'matter-1',
+        type: 'DOCUMENT_REPLACED',
+        documentId: 'document-new',
+        actor: 'USER',
+        createdAt: 1
+      })
+    ).toThrow('replacement workspace events link the new and superseded Document')
+    expect(() =>
+      assertWorkspaceEvent({
+        id: 'event-1',
+        matterId: 'matter-1',
+        type: 'DOCUMENT_REPLACED',
+        supersededDocumentId: 'document-old',
+        actor: 'USER',
+        createdAt: 1
+      })
+    ).toThrow('replacement workspace events link the new and superseded Document')
+    // A Document cannot replace itself.
+    expect(() =>
+      assertWorkspaceEvent({
+        id: 'event-1',
+        matterId: 'matter-1',
+        type: 'DOCUMENT_REPLACED',
+        documentId: 'document-old',
+        supersededDocumentId: 'document-old',
+        actor: 'USER',
+        createdAt: 1
+      })
+    ).toThrow('a Document cannot replace itself')
+    // Only replacement events may carry a superseded Document.
+    expect(() =>
+      assertWorkspaceEvent({
+        id: 'event-1',
+        matterId: 'matter-1',
+        type: 'DOCUMENT_TRASHED',
+        documentId: 'document-1',
+        supersededDocumentId: 'document-old',
+        actor: 'USER',
+        createdAt: 1
+      })
+    ).toThrow('only replacement workspace events carry a superseded Document')
   })
 
   it('accepts a valid SanitizedDocument and rejects empty identifiers', () => {
