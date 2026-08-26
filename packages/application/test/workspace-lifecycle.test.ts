@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DocumentRepository,
   MatterRepository,
@@ -181,6 +181,25 @@ describe('workspace lifecycle application service', () => {
       const second = await imports.importFromPath(matter.id, secondPath)
       expect(second.id).not.toBe(first.id)
       expect(new ReviewQueryRepository(db).listDocumentsByMatter(matter.id)).toHaveLength(2)
+    })
+
+    it('wraps persistence failures as IMPORT_FAILED instead of INTERNAL_ERROR', async () => {
+      const matter = matters.create('Synthetic Matter')
+      const sourcePath = await writeSource('boom.pdf', 'synthetic source')
+      const repo = new DocumentRepository(db)
+      vi.spyOn(repo, 'createInAvailableMatter').mockImplementation(() => {
+        throw new Error('SqliteError: database is full')
+      })
+      const failing = new DocumentImportService(repo, new MatterRepository(db), { persistenceKey: key }, () => timestamp++)
+
+      try {
+        await failing.importFromPath(matter.id, sourcePath)
+        expect.unreachable('import should fail')
+      } catch (error) {
+        expect(error).toBeInstanceOf(DocumentImportError)
+        expect((error as DocumentImportError).code).toBe('IMPORT_FAILED')
+      }
+      expect((sqlite.prepare('SELECT COUNT(*) AS count FROM documents').get() as { count: number }).count).toBe(0)
     })
 
     it('fails with MATTER_NOT_AVAILABLE when importing into a deleted Matter', async () => {

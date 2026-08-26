@@ -8,6 +8,7 @@ import {
   PrivacyDetectionRepository,
   ProtectedValueRepository,
   ReviewQueryRepository,
+  SanitizationRepository,
   WorkspaceLifecycleRepository,
   migrateDatabase,
   openDatabase,
@@ -17,6 +18,7 @@ import {
 import {
   EntityResolutionService,
   MatterService,
+  PseudonymizationService,
   ReviewOperationService,
   ReviewQueryService,
   WorkspaceLifecycleService,
@@ -69,7 +71,8 @@ describe('workspace lifecycle guards', () => {
       new EntityResolutionRepository(db),
       new ProtectedValueRepository(db),
       new EntityRepository(db),
-      keys
+      keys,
+      () => timestamp++
     )
     operations = new ReviewOperationService(resolution, reviewQuery)
     seedDocumentWithReviewableMention()
@@ -186,22 +189,28 @@ describe('workspace lifecycle guards', () => {
   }
 
   describe('review writes fail closed on trashed Documents', () => {
-    beforeEach(() => {
-      expect(lifecycle.trashDocument('document-1')).toEqual({ changed: true })
-    })
-
-    it('rejects assign, confirm, create-and-assign, reject, and manual mention without side effects', () => {
+    it('rejects assign, confirm, create-and-assign, reject, split, and manual mention without side effects', () => {
+      // Assign while the Document is still active so confirm and split reach
+      // their repository transaction guards instead of failing earlier on an
+      // unassigned Mention.
+      operations.assignToEntity('mention-1', 'entity-1')
       const eventsBefore = resolutionEventCount()
+      expect(lifecycle.trashDocument('document-1')).toEqual({ changed: true })
       const mentionBefore = sqlite
         .prepare('SELECT entity_id, review_status FROM mentions WHERE id = ?')
         .get('mention-1') as { entity_id: string | null; review_status: string }
 
       expect(() => operations.assignToEntity('mention-1', 'entity-1')).toThrow(expect.objectContaining({ code: 'ASSIGNMENT_FAILED' }))
-      expect(() => operations.confirmMention('mention-1')).toThrow(expect.objectContaining({ code: 'MENTION_UNASSIGNED' }))
+      expect(() => operations.confirmMention('mention-1')).toThrow(expect.objectContaining({ code: 'CONFIRMATION_FAILED' }))
       expect(() =>
         operations.createEntityAndAssign('mention-1', { primaryAlias: 'Party A', entityType: 'PERSON' })
       ).toThrow(expect.objectContaining({ code: 'ASSIGNMENT_FAILED' }))
       expect(() => operations.rejectMention('mention-1')).toThrow(expect.objectContaining({ code: 'REJECTION_FAILED' }))
+      // Split composes createEntityWithAssignment, whose transaction guard
+      // fails first; the inner ASSIGNMENT_FAILED code surfaces unchanged.
+      expect(() => operations.splitMention('mention-1', 'Party B')).toThrow(
+        expect.objectContaining({ code: 'ASSIGNMENT_FAILED' })
+      )
       expect(() =>
         operations.createManualMention({ blockId: 'block-1', type: 'EMAIL', startOffset: 0, endOffset: 5 })
       ).toThrow(expect.objectContaining({ code: 'MANUAL_MENTION_FAILED' }))
@@ -210,7 +219,8 @@ describe('workspace lifecycle guards', () => {
       expect(
         sqlite.prepare('SELECT entity_id, review_status FROM mentions WHERE id = ?').get('mention-1')
       ).toEqual(mentionBefore)
-      // No new entity or mention appeared either.
+      // No new entity or mention appeared either — in particular the split
+      // created no half-built Entity.
       expect((sqlite.prepare('SELECT COUNT(*) AS count FROM entities').get() as { count: number }).count).toBe(1)
       expect((sqlite.prepare('SELECT COUNT(*) AS count FROM mentions').get() as { count: number }).count).toBe(1)
     })
@@ -356,21 +366,50 @@ describe('workspace lifecycle guards', () => {
     })
   })
 
-  describe('completed fast paths respect the Matter lifecycle', () => {
-    it('stops reusing completed detection, resolution, and sanitization once the Matter is trashed', async () => {
+  describe('completed fast paths respect the lifecycle', () => {
+    // A Document sits in exactly one completed stage at a time, so each fast
+    // path gets its own fixture advanced through the real pipeline.
+    it('stops reusing completed detection after Matter or Document trash', () => {
       const detection = new PrivacyDetectionRepository(db)
       expect(detection.findCompleted('document-1')).toBeDefined()
 
       lifecycle.trashMatter('matter-1')
       expect(detection.findCompleted('document-1')).toBeUndefined()
-      expect(new EntityResolutionRepository(db).findCompleted('document-1')).toBeUndefined()
-
-      // A document in a live Matter but individually trashed is also excluded.
       lifecycle.restoreMatter('matter-1')
       expect(detection.findCompleted('document-1')).toBeDefined()
       lifecycle.trashDocument('document-1')
       expect(detection.findCompleted('document-1')).toBeUndefined()
-      expect(new EntityResolutionRepository(db).findCompleted('document-1')).toBeUndefined()
+    })
+
+    it('stops reusing completed resolution after Matter or Document trash', async () => {
+      await resolution.resolve('document-1')
+      expect(documents.findById('document-1')?.parseStatus).toBe('READY')
+      const resolutionRepository = new EntityResolutionRepository(db)
+      expect(resolutionRepository.findCompleted('document-1')).toBeDefined()
+
+      lifecycle.trashMatter('matter-1')
+      expect(resolutionRepository.findCompleted('document-1')).toBeUndefined()
+      lifecycle.restoreMatter('matter-1')
+      expect(resolutionRepository.findCompleted('document-1')).toBeDefined()
+      lifecycle.trashDocument('document-1')
+      expect(resolutionRepository.findCompleted('document-1')).toBeUndefined()
+    })
+
+    it('stops reusing completed sanitization after Matter or Document trash', async () => {
+      await resolution.resolve('document-1')
+      await new PseudonymizationService(new SanitizationRepository(db), { persistenceKey }, () => timestamp++).sanitize(
+        'document-1'
+      )
+      expect(documents.findById('document-1')?.parseStatus).toBe('SANITIZED')
+      const sanitization = new SanitizationRepository(db)
+      expect(sanitization.findCompleted('document-1')).toBeDefined()
+
+      lifecycle.trashMatter('matter-1')
+      expect(sanitization.findCompleted('document-1')).toBeUndefined()
+      lifecycle.restoreMatter('matter-1')
+      expect(sanitization.findCompleted('document-1')).toBeDefined()
+      lifecycle.trashDocument('document-1')
+      expect(sanitization.findCompleted('document-1')).toBeUndefined()
     })
   })
 })

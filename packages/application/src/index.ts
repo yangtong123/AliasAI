@@ -77,29 +77,37 @@ export class DocumentImportService {
     const source = await inspectDocumentSource(filePath)
     const timestamp = this.now()
     const id = generateUuidV7(timestamp)
-    const decision = this.documents.createInAvailableMatter({
-      id,
-      matterId,
-      originalNameCipher: encrypt(
-        Buffer.from(source.originalName, 'utf8'),
-        this.keys.persistenceKey,
-        documentOriginalNameContext(id)
-      ),
-      sourcePathCipher: encrypt(
-        Buffer.from(source.sourcePath, 'utf8'),
-        this.keys.persistenceKey,
-        documentSourcePathContext(id)
-      ),
-      fileHash: source.fileHash,
-      mimeType: source.mimeType,
-      parseStatus: 'IMPORTED',
-      createdAt: timestamp,
-      updatedAt: timestamp
-    })
-    if (decision.status === 'MATTER_UNAVAILABLE') {
-      throw new DocumentImportError('MATTER_NOT_AVAILABLE', 'Matter is not available')
+    try {
+      const decision = this.documents.createInAvailableMatter({
+        id,
+        matterId,
+        originalNameCipher: encrypt(
+          Buffer.from(source.originalName, 'utf8'),
+          this.keys.persistenceKey,
+          documentOriginalNameContext(id)
+        ),
+        sourcePathCipher: encrypt(
+          Buffer.from(source.sourcePath, 'utf8'),
+          this.keys.persistenceKey,
+          documentSourcePathContext(id)
+        ),
+        fileHash: source.fileHash,
+        mimeType: source.mimeType,
+        parseStatus: 'IMPORTED',
+        createdAt: timestamp,
+        updatedAt: timestamp
+      })
+      if (decision.status === 'MATTER_UNAVAILABLE') {
+        throw new DocumentImportError('MATTER_NOT_AVAILABLE', 'Matter is not available')
+      }
+      return decision.document
+    } catch (error) {
+      // MATTER_NOT_AVAILABLE keeps its dedicated code; every persistence
+      // failure (SQLite, unique-constraint races, ciphers) stays IMPORT_FAILED
+      // instead of collapsing to INTERNAL_ERROR at the IPC boundary.
+      if (error instanceof DocumentImportError) throw error
+      throw new DocumentImportError('IMPORT_FAILED', 'Document could not be imported', { cause: error })
     }
-    return decision.document
   }
 }
 
