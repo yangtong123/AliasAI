@@ -13,7 +13,8 @@ import type {
   ProtectedValue,
   SanitizationMapping,
   SanitizedBlock,
-  SanitizedDocument
+  SanitizedDocument,
+  WorkspaceEvent
 } from './types'
 
 /** Raised when an object would violate a documented AliasAI domain rule. */
@@ -75,6 +76,12 @@ export function assertDocument(document: Document): void {
   }
   if (document.pageCount !== undefined && (!Number.isSafeInteger(document.pageCount) || document.pageCount < 1)) {
     throw new DomainInvariantError('document.pageCount must be a positive safe integer when present')
+  }
+  if (document.deletedAt !== undefined) {
+    requireNonNegativeInteger(document.deletedAt, 'document.deletedAt')
+    if (document.deletedAt < document.createdAt) {
+      throw new DomainInvariantError('document.deletedAt must not precede document.createdAt')
+    }
   }
 }
 
@@ -290,6 +297,33 @@ export function assertEntityRelationship(relationship: EntityRelationship): void
   requireIdentifier(relationship.relationshipType, 'relationship.relationshipType')
   requireUnitInterval(relationship.confidence, 'relationship.confidence')
   requireNonNegativeInteger(relationship.createdAt, 'relationship.createdAt')
+}
+
+const MATTER_WORKSPACE_EVENT_TYPES = new Set(['MATTER_TRASHED', 'MATTER_RESTORED'])
+const DOCUMENT_WORKSPACE_EVENT_TYPES = new Set(['DOCUMENT_TRASHED', 'DOCUMENT_RESTORED'])
+
+/** Verifies the container lifecycle event shape: target type and IDs must agree. */
+export function assertWorkspaceEvent(event: WorkspaceEvent): void {
+  requireIdentifier(event.id, 'workspaceEvent.id')
+  requireIdentifier(event.matterId, 'workspaceEvent.matterId')
+  requireNonNegativeInteger(event.createdAt, 'workspaceEvent.createdAt')
+  if (event.actor !== 'USER') {
+    throw new DomainInvariantError('workspace events are always user-authored in V1')
+  }
+  if (MATTER_WORKSPACE_EVENT_TYPES.has(event.type)) {
+    if (event.documentId !== undefined) {
+      throw new DomainInvariantError('matter workspace events must not carry a documentId')
+    }
+    return
+  }
+  if (DOCUMENT_WORKSPACE_EVENT_TYPES.has(event.type)) {
+    if (event.documentId === undefined) {
+      throw new DomainInvariantError('document workspace events require a documentId')
+    }
+    requireIdentifier(event.documentId, 'workspaceEvent.documentId')
+    return
+  }
+  throw new DomainInvariantError('workspaceEvent.type is not supported')
 }
 
 /** Ensures identities do not cross the Matter privacy boundary. */

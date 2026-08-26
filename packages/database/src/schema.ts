@@ -33,7 +33,9 @@ import type {
   ResolutionActor,
   ResolutionCandidateState,
   ResolutionEventType,
-  RestorePolicy
+  RestorePolicy,
+  WorkspaceActor,
+  WorkspaceEventType
 } from '@aliasai/domain'
 
 const timestamp = (name: string) => integer(name).notNull()
@@ -62,12 +64,20 @@ export const documents = sqliteTable(
     pageCount: integer('page_count'),
     parseStatus: text('parse_status').$type<DocumentParseStatus>().notNull(),
     createdAt: timestamp('created_at'),
-    updatedAt: timestamp('updated_at')
+    updatedAt: timestamp('updated_at'),
+    deletedAt: integer('deleted_at')
   },
   (table) => [
-    uniqueIndex('uq_documents_matter_file_hash').on(table.matterId, table.fileHash),
+    // Trash is recoverable, so uniqueness applies to active Documents only: a
+    // trashed Document never blocks re-importing the same file as a new Document.
+    uniqueIndex('uq_documents_active_matter_file_hash')
+      .on(table.matterId, table.fileHash)
+      .where(sql`${table.deletedAt} IS NULL`),
     index('idx_documents_matter').on(table.matterId),
+    index('idx_documents_matter_deleted').on(table.matterId, table.deletedAt),
     check('documents_page_count_positive', sql`${table.pageCount} IS NULL OR ${table.pageCount} >= 1`)
+    // deleted_at ordering (null or >= created_at) is enforced by DB triggers in
+    // the migrations, like the other trigger-only guarantees drizzle cannot express.
   ]
 )
 
@@ -599,6 +609,39 @@ export const aiExecutions = sqliteTable(
   ]
 )
 
+export const workspaceEvents = sqliteTable(
+  'workspace_events',
+  {
+    id: text('id').primaryKey(),
+    matterId: text('matter_id')
+      .notNull()
+      .references(() => matters.id),
+    documentId: text('document_id').references(() => documents.id),
+    eventType: text('event_type').$type<WorkspaceEventType>().notNull(),
+    actor: text('actor').$type<WorkspaceActor>().notNull(),
+    createdAt: timestamp('created_at')
+  },
+  (table) => [
+    index('idx_workspace_events_matter_time').on(table.matterId, table.createdAt),
+    index('idx_workspace_events_document_time').on(table.documentId, table.createdAt),
+    check(
+      'workspace_events_type_allowed',
+      sql`${table.eventType} IN ('MATTER_TRASHED', 'MATTER_RESTORED', 'DOCUMENT_TRASHED', 'DOCUMENT_RESTORED')`
+    ),
+    check('workspace_events_actor_allowed', sql`${table.actor} = 'USER'`),
+    check(
+      'workspace_events_target_consistent',
+      sql`(
+        ${table.eventType} IN ('MATTER_TRASHED', 'MATTER_RESTORED')
+        AND ${table.documentId} IS NULL
+      ) OR (
+        ${table.eventType} IN ('DOCUMENT_TRASHED', 'DOCUMENT_RESTORED')
+        AND ${table.documentId} IS NOT NULL
+      )`
+    )
+  ]
+)
+
 export const schema = {
   matters,
   documents,
@@ -614,6 +657,7 @@ export const schema = {
   resolutionEvidence,
   entityConstraints,
   resolutionEvents,
+  workspaceEvents,
   processingJobs,
   sanitizedDocuments,
   sanitizedBlocks,

@@ -164,7 +164,8 @@ describe('SQLite schema and repositories', () => {
       'resolution_evidence',
       'sanitization_mappings',
       'sanitized_blocks',
-      'sanitized_documents'
+      'sanitized_documents',
+      'workspace_events'
     ])
   })
 

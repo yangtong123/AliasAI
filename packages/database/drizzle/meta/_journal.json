@@ -43,6 +43,13 @@
       "when": 1787659184186,
       "tag": "0005_smiling_diamondback",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1787712985919,
+      "tag": "0006_robust_drax",
+      "breakpoints": true
     }
   ]
 }

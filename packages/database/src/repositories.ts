@@ -162,11 +162,14 @@ export class DocumentRepository {
     return document
   }
 
+  /** Import deduplication: only an active Document with this hash is reused. */
   findByMatterAndFileHash(matterId: string, fileHash: string): Document | undefined {
     const row = this.db
       .select()
       .from(documents)
-      .where(and(eq(documents.matterId, matterId), eq(documents.fileHash, fileHash)))
+      .where(
+        and(eq(documents.matterId, matterId), eq(documents.fileHash, fileHash), isNull(documents.deletedAt))
+      )
       .get()
     return row === undefined ? undefined : toDocument(row)
   }
@@ -176,12 +179,33 @@ export class DocumentRepository {
     return row === undefined ? undefined : toDocument(row)
   }
 
+  /**
+   * User-facing read: the Document must be active and its Matter must not be
+   * deleted. Historical (unfiltered) access stays on the explicitly named
+   * findById so one method never sometimes filters and sometimes retains.
+   */
+  findAvailableById(id: string): Document | undefined {
+    const row = this.db
+      .select({ document: documents })
+      .from(documents)
+      .innerJoin(matters, eq(matters.id, documents.matterId))
+      .where(and(eq(documents.id, id), isNull(documents.deletedAt), ne(matters.status, 'DELETED')))
+      .get()
+    return row === undefined ? undefined : toDocument(row.document)
+  }
+
   findProcessingSource(id: string): DocumentProcessingSource | undefined {
-    const row = this.db.select().from(documents).where(eq(documents.id, id)).get()
+    const row = this.db
+      .select({ document: documents, matterStatus: matters.status })
+      .from(documents)
+      .innerJoin(matters, eq(matters.id, documents.matterId))
+      .where(eq(documents.id, id))
+      .get()
     if (row === undefined) return undefined
+    if (row.document.deletedAt !== null || row.matterStatus === 'DELETED') return undefined
     return {
-      document: toDocument(row),
-      ...(row.sourcePathCipher === null ? {} : { sourcePathCipher: row.sourcePathCipher })
+      document: toDocument(row.document),
+      ...(row.document.sourcePathCipher === null ? {} : { sourcePathCipher: row.document.sourcePathCipher })
     }
   }
 
@@ -189,6 +213,7 @@ export class DocumentRepository {
     if (parserType.trim().length === 0) throw new Error('parserType must not be empty')
     const current = this.findById(documentId)
     if (current === undefined) throw new Error('Document was not found')
+    if (current.deletedAt !== undefined) throw new Error('Document is not available for processing')
     if (updatedAt < current.updatedAt) throw new Error('Document processing timestamp must not move backwards')
     if (
       current.parseStatus === 'FAILED' &&
@@ -204,6 +229,7 @@ export class DocumentRepository {
       .where(
         and(
           eq(documents.id, documentId),
+          isNull(documents.deletedAt),
           inArray(documents.parseStatus, ['IMPORTED', 'FAILED'])
         )
       )
@@ -364,8 +390,19 @@ export class PrivacyDetectionRepository {
   constructor(private readonly db: AliasAiDatabase) {}
 
   findCompleted(documentId: string): PrivacyDetectionResult | undefined {
-    const documentRow = this.db.select().from(documents).where(eq(documents.id, documentId)).get()
-    if (documentRow === undefined || documentRow.parseStatus !== 'DETECTED') return undefined
+    const documentRow = this.db
+      .select({ document: documents })
+      .from(documents)
+      .innerJoin(matters, eq(matters.id, documents.matterId))
+      .where(eq(documents.id, documentId))
+      .get()
+    if (
+      documentRow === undefined ||
+      documentRow.document.parseStatus !== 'DETECTED' ||
+      documentRow.document.deletedAt !== null
+    ) {
+      return undefined
+    }
     const jobRow = this.db
       .select()
       .from(processingJobs)
@@ -381,7 +418,7 @@ export class PrivacyDetectionRepository {
       .get()
     if (jobRow === undefined) throw new Error('Detected Document is missing its completed ProcessingJob')
     return {
-      document: toDocument(documentRow),
+      document: toDocument(documentRow.document),
       job: toProcessingJob(jobRow),
       mentions: this.findMentions(documentId)
     }
@@ -392,6 +429,9 @@ export class PrivacyDetectionRepository {
     return this.db.transaction((transaction) => {
       const current = transaction.select().from(documents).where(eq(documents.id, input.documentId)).get()
       if (current === undefined) throw new Error('Document was not found')
+      if (current.deletedAt !== null || !matterIsAvailable(transaction, current.matterId)) {
+        throw new Error('Document is not available for privacy detection')
+      }
       if (input.startedAt < current.updatedAt) throw new Error('Privacy detection timestamp must not move backwards')
       if (current.parseStatus !== 'PARSED' && current.parseStatus !== 'FAILED') {
         throw new Error('Document is not available for privacy detection')
@@ -625,6 +665,15 @@ type EntityAliasRow = typeof entityAliases.$inferSelect
 type EntityConstraintRow = typeof entityConstraints.$inferSelect
 type ProtectedValueRow = typeof protectedValues.$inferSelect
 
+/** The transaction handle type drizzle passes to `db.transaction` callbacks. */
+type TransactionLike = Parameters<Parameters<AliasAiDatabase['transaction']>[0]>[0]
+
+/** True when the Matter exists and is not in the trash. */
+function matterIsAvailable(db: AliasAiDatabase | TransactionLike, matterId: string): boolean {
+  const row = db.select({ status: matters.status }).from(matters).where(eq(matters.id, matterId)).get()
+  return row !== undefined && row.status !== 'DELETED'
+}
+
 function toDocument(row: DocumentRow): Document {
   return {
     id: row.id,
@@ -635,7 +684,8 @@ function toDocument(row: DocumentRow): Document {
     ...(row.parserType === null ? {} : { parserType: row.parserType }),
     parseStatus: row.parseStatus,
     createdAt: row.createdAt,
-    updatedAt: row.updatedAt
+    updatedAt: row.updatedAt,
+    ...(row.deletedAt === null ? {} : { deletedAt: row.deletedAt })
   }
 }
 
@@ -1235,8 +1285,19 @@ export class EntityResolutionRepository {
   constructor(private readonly db: AliasAiDatabase) {}
 
   findCompleted(documentId: string): EntityResolutionResult | undefined {
-    const documentRow = this.db.select().from(documents).where(eq(documents.id, documentId)).get()
-    if (documentRow === undefined || documentRow.parseStatus !== 'READY') return undefined
+    const documentRow = this.db
+      .select({ document: documents })
+      .from(documents)
+      .innerJoin(matters, eq(matters.id, documents.matterId))
+      .where(eq(documents.id, documentId))
+      .get()
+    if (
+      documentRow === undefined ||
+      documentRow.document.parseStatus !== 'READY' ||
+      documentRow.document.deletedAt !== null
+    ) {
+      return undefined
+    }
     const jobRow = this.db
       .select()
       .from(processingJobs)
@@ -1251,7 +1312,7 @@ export class EntityResolutionRepository {
       .limit(1)
       .get()
     if (jobRow === undefined) throw new Error('Ready Document is missing its completed ProcessingJob')
-    return { document: toDocument(documentRow), job: toProcessingJob(jobRow) }
+    return { document: toDocument(documentRow.document), job: toProcessingJob(jobRow) }
   }
 
   begin(input: BeginEntityResolutionInput): BegunEntityResolution {
@@ -1259,6 +1320,9 @@ export class EntityResolutionRepository {
     return this.db.transaction((transaction) => {
       const current = transaction.select().from(documents).where(eq(documents.id, input.documentId)).get()
       if (current === undefined) throw new Error('Document was not found')
+      if (current.deletedAt !== null || !matterIsAvailable(transaction, current.matterId)) {
+        throw new Error('Document is not available for entity resolution')
+      }
       if (input.startedAt < current.updatedAt) throw new Error('Entity resolution timestamp must not move backwards')
       if (current.parseStatus !== 'DETECTED' && current.parseStatus !== 'FAILED') {
         throw new Error('Document is not available for entity resolution')
@@ -2560,8 +2624,19 @@ export class SanitizationRepository {
   constructor(private readonly db: AliasAiDatabase) {}
 
   findCompleted(documentId: string): SanitizationResult | undefined {
-    const documentRow = this.db.select().from(documents).where(eq(documents.id, documentId)).get()
-    if (documentRow === undefined || documentRow.parseStatus !== 'SANITIZED') return undefined
+    const documentRow = this.db
+      .select({ document: documents })
+      .from(documents)
+      .innerJoin(matters, eq(matters.id, documents.matterId))
+      .where(eq(documents.id, documentId))
+      .get()
+    if (
+      documentRow === undefined ||
+      documentRow.document.parseStatus !== 'SANITIZED' ||
+      documentRow.document.deletedAt !== null
+    ) {
+      return undefined
+    }
     const jobRow = this.db
       .select()
       .from(processingJobs)
@@ -2583,7 +2658,7 @@ export class SanitizationRepository {
       .get()
     if (sanitizedRow === undefined) throw new Error('Sanitized Document is missing its sanitized artifact')
     return {
-      document: toDocument(documentRow),
+      document: toDocument(documentRow.document),
       job: toProcessingJob(jobRow),
       sanitizedDocument: toSanitizedDocument(sanitizedRow)
     }
@@ -2594,6 +2669,9 @@ export class SanitizationRepository {
     return this.db.transaction((transaction) => {
       const current = transaction.select().from(documents).where(eq(documents.id, input.documentId)).get()
       if (current === undefined) throw new Error('Document was not found')
+      if (current.deletedAt !== null || !matterIsAvailable(transaction, current.matterId)) {
+        throw new Error('Document is not available for sanitization')
+      }
       if (input.startedAt < current.updatedAt) throw new Error('Sanitization timestamp must not move backwards')
       if (current.parseStatus !== 'READY' && current.parseStatus !== 'FAILED') {
         throw new Error('Document is not available for sanitization')
@@ -3048,12 +3126,25 @@ export class AiExecutionRepository {
 
   findSource(sanitizedDocumentId: string): AiExecutionSource | undefined {
     const source = this.db
-      .select({ sanitizedDocument: sanitizedDocuments, documentStatus: documents.parseStatus })
+      .select({
+        sanitizedDocument: sanitizedDocuments,
+        documentStatus: documents.parseStatus,
+        documentDeletedAt: documents.deletedAt,
+        matterStatus: matters.status
+      })
       .from(sanitizedDocuments)
       .innerJoin(documents, eq(documents.id, sanitizedDocuments.documentId))
+      .innerJoin(matters, eq(matters.id, sanitizedDocuments.matterId))
       .where(eq(sanitizedDocuments.id, sanitizedDocumentId))
       .get()
-    if (source === undefined || source.documentStatus !== 'SANITIZED') return undefined
+    if (
+      source === undefined ||
+      source.documentStatus !== 'SANITIZED' ||
+      source.documentDeletedAt !== null ||
+      source.matterStatus === 'DELETED'
+    ) {
+      return undefined
+    }
 
     const sanitizedDocument = toSanitizedDocument(source.sanitizedDocument)
     const blocks = this.db
@@ -3137,15 +3228,23 @@ export class AiExecutionRepository {
     if (input.requestCipher.length === 0) throw new Error('AI execution requestCipher must not be empty')
     return this.db.transaction((transaction) => {
       const source = transaction
-        .select({ matterId: sanitizedDocuments.matterId, documentStatus: documents.parseStatus })
+        .select({
+          matterId: sanitizedDocuments.matterId,
+          documentStatus: documents.parseStatus,
+          documentDeletedAt: documents.deletedAt,
+          matterStatus: matters.status
+        })
         .from(sanitizedDocuments)
         .innerJoin(documents, eq(documents.id, sanitizedDocuments.documentId))
+        .innerJoin(matters, eq(matters.id, sanitizedDocuments.matterId))
         .where(eq(sanitizedDocuments.id, input.execution.sanitizedDocumentId))
         .get()
       if (
         source === undefined ||
         source.matterId !== input.execution.matterId ||
-        source.documentStatus !== 'SANITIZED'
+        source.documentStatus !== 'SANITIZED' ||
+        source.documentDeletedAt !== null ||
+        source.matterStatus === 'DELETED'
       ) {
         throw new Error('AI execution source is not an available Sanitized Document in the same Matter')
       }

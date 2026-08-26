@@ -41,12 +41,21 @@ Allowed status: `ACTIVE`, `ARCHIVED`, `DELETED`.
 | parse_status | TEXT | NOT NULL |
 | created_at | INTEGER | NOT NULL |
 | updated_at | INTEGER | NOT NULL |
+| deleted_at | INTEGER | nullable |
 
-Unique: `(matter_id, file_hash)`.
+`deleted_at` is the recoverable-trash timestamp: `NULL` for an active Document,
+set to the trash time for a trashed one. It never participates in the parsing
+state machine, and the trigger `documents_deleted_at_ordered_insert/update`
+rejects a value earlier than `created_at`.
+
+Unique (active Documents only, partial index):
+`(matter_id, file_hash) WHERE deleted_at IS NULL` — a trashed Document never
+blocks importing the same file as a new active Document.
 
 Indexes:
 
 - `idx_documents_matter(matter_id)`
+- `idx_documents_matter_deleted(matter_id, deleted_at)`
 
 ### document_pages
 
@@ -333,6 +342,31 @@ Indexes:
 - `idx_resolution_events_matter_time(matter_id, created_at)`
 - `idx_resolution_events_entity(entity_id)`
 - `idx_resolution_events_mention(mention_id)`
+
+### workspace_events
+
+Append-only container lifecycle history (trash/restore). Updates and deletes
+are rejected by the `workspace_events_append_only_update/delete` triggers; a
+scope insert trigger requires a non-null `document_id` to reference a Document
+of the same Matter.
+
+| Column | Type | Constraints |
+|---|---|---|
+| id | TEXT | PK |
+| matter_id | TEXT | FK matters(id), NOT NULL |
+| document_id | TEXT | FK documents(id), nullable |
+| event_type | TEXT | NOT NULL |
+| actor | TEXT | NOT NULL (`USER`) |
+| created_at | INTEGER | NOT NULL |
+
+Allowed event types: `MATTER_TRASHED`, `MATTER_RESTORED`, `DOCUMENT_TRASHED`,
+`DOCUMENT_RESTORED`. Matter events must have `document_id IS NULL`; Document
+events must have `document_id IS NOT NULL` (CHECK constraint).
+
+Indexes:
+
+- `idx_workspace_events_matter_time(matter_id, created_at)`
+- `idx_workspace_events_document_time(document_id, created_at)`
 
 ### sanitized_documents
 

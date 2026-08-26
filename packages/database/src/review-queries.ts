@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, ne } from 'drizzle-orm'
 import type {
   BlockType,
   Document,
@@ -79,10 +79,12 @@ export interface SanitizationReadinessMention {
 export class ReviewQueryRepository {
   constructor(private readonly db: AliasAiDatabase) {}
 
+  /** Normal workspace list: Matters in the trash are invisible. */
   listMatters(): readonly MatterListItem[] {
     return this.db
       .select()
       .from(matters)
+      .where(ne(matters.status, 'DELETED'))
       .orderBy(asc(matters.createdAt), asc(matters.id))
       .all()
       .map((row) => ({
@@ -94,14 +96,16 @@ export class ReviewQueryRepository {
       }))
   }
 
+  /** Normal workspace list: empty for a deleted Matter and excludes trashed Documents. */
   listDocumentsByMatter(matterId: string): readonly DocumentListItem[] {
     const documentRows = this.db
-      .select()
+      .select({ document: documents })
       .from(documents)
-      .where(eq(documents.matterId, matterId))
+      .innerJoin(matters, eq(matters.id, documents.matterId))
+      .where(and(eq(documents.matterId, matterId), ne(matters.status, 'DELETED'), isNull(documents.deletedAt)))
       .orderBy(asc(documents.createdAt), asc(documents.id))
       .all()
-    return documentRows.map((row) => ({
+    return documentRows.map(({ document: row }) => ({
       document: {
         id: row.id,
         matterId: row.matterId,

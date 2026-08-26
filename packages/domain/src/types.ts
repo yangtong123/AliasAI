@@ -36,6 +36,11 @@ export interface Document {
   readonly parseStatus: DocumentParseStatus
   readonly createdAt: number
   readonly updatedAt: number
+  /**
+   * Workspace lifecycle timestamp, independent of parseStatus. Undefined for an
+   * active Document; set to the trash time for a trashed one.
+   */
+  readonly deletedAt?: number
 }
 
 export type PageSourceType = 'NATIVE' | 'RASTER' | 'MIXED'
@@ -289,6 +294,29 @@ export interface ResolutionEvent {
   readonly entityId?: string
   readonly mentionId?: string
   readonly actor: ResolutionActor
+  readonly createdAt: number
+}
+
+/**
+ * Container lifecycle change (trash/restore of a Matter or Document). Kept
+ * separate from ResolutionEvent: resolution events explain identity decisions,
+ * workspace events explain container lifecycle changes.
+ */
+export type WorkspaceEventType =
+  | 'MATTER_TRASHED'
+  | 'MATTER_RESTORED'
+  | 'DOCUMENT_TRASHED'
+  | 'DOCUMENT_RESTORED'
+
+/** Workspace lifecycle events are always user-authored in V1. */
+export type WorkspaceActor = 'USER'
+
+export interface WorkspaceEvent {
+  readonly id: string
+  readonly matterId: string
+  readonly documentId?: string
+  readonly type: WorkspaceEventType
+  readonly actor: WorkspaceActor
   readonly createdAt: number
 }
 
