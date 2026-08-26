@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "80a76b77-edb0-40ee-9fe1-a3637b280895",
+  "id": "a84d1b6e-a6b1-44a1-9aff-fb1df78b5b8a",
   "prevId": "c03c9e8a-f4a2-4ad6-b597-c4a333a82ab9",
   "tables": {
     "ai_executions": {
@@ -554,6 +554,14 @@
             "supersedes_document_id"
           ],
           "isUnique": false
+        },
+        "uq_documents_supersedes": {
+          "name": "uq_documents_supersedes",
+          "columns": [
+            "supersedes_document_id"
+          ],
+          "isUnique": true,
+          "where": "\"documents\".\"supersedes_document_id\" IS NOT NULL"
         }
       },
       "foreignKeys": {

@@ -69,6 +69,16 @@ BEGIN
 	SELECT RAISE(ABORT, 'workspace events are append-only');
 END;
 --> statement-breakpoint
+CREATE TRIGGER `workspace_events_replacement_lineage_insert`
+BEFORE INSERT ON `workspace_events`
+WHEN NEW.`event_type` = 'DOCUMENT_REPLACED'
+	AND (
+		SELECT `supersedes_document_id` FROM `documents` WHERE `id` = NEW.`document_id`
+	) IS NOT NEW.`superseded_document_id`
+BEGIN
+	SELECT RAISE(ABORT, 'replacement event must match the new document lineage');
+END;
+--> statement-breakpoint
 ALTER TABLE `documents` ADD `supersedes_document_id` text REFERENCES documents(id);--> statement-breakpoint
 CREATE INDEX `idx_documents_supersedes` ON `documents` (`supersedes_document_id`);--> statement-breakpoint
 CREATE TRIGGER `documents_supersedes_self_insert`
@@ -104,4 +114,5 @@ BEFORE UPDATE OF `supersedes_document_id` ON `documents`
 WHEN NEW.`supersedes_document_id` IS NOT OLD.`supersedes_document_id`
 BEGIN
 	SELECT RAISE(ABORT, 'documents.supersedes_document_id is immutable');
-END;
+END;--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_documents_supersedes` ON `documents` (`supersedes_document_id`) WHERE "documents"."supersedes_document_id" IS NOT NULL;

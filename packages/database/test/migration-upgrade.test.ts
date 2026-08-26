@@ -327,6 +327,35 @@ describe('database migration upgrades', () => {
         upgraded.sqlite.prepare("UPDATE workspace_events SET event_type = 'MATTER_RESTORED' WHERE id = 'event-replaced'").run()
       ).toThrowError(/append-only/)
       expect(() => upgraded.sqlite.prepare('DELETE FROM workspace_events').run()).toThrowError(/append-only/)
+
+      // A replacement event must match the new Document's recorded lineage
+      // exactly: an event claiming a different superseded Document is rejected,
+      // so a wrong audit row can never be appended.
+      upgraded.sqlite
+        .prepare(
+          `INSERT INTO documents (id, matter_id, original_name_cipher, file_hash, mime_type, parse_status, created_at, updated_at, deleted_at)
+           VALUES ('document-old-2', 'matter-lineage', ?, 'hash-old-2', 'application/pdf', 'IMPORTED', 14, 14, 14)`
+        )
+        .run(Buffer.from('w'))
+      expect(() =>
+        upgraded.sqlite
+          .prepare(
+            `INSERT INTO workspace_events (id, matter_id, document_id, superseded_document_id, event_type, actor, created_at)
+             VALUES ('event-mismatch', 'matter-lineage', 'document-new', 'document-old-2', 'DOCUMENT_REPLACED', 'USER', 14)`
+          )
+          .run()
+      ).toThrowError(/must match the new document lineage/)
+
+      // Lineage is linear: a second Document superseding the same old one is
+      // rejected by the partial unique index even after the old one is restored.
+      expect(() =>
+        upgraded.sqlite
+          .prepare(
+            `INSERT INTO documents (id, matter_id, original_name_cipher, file_hash, mime_type, parse_status, created_at, updated_at, supersedes_document_id)
+             VALUES ('document-fork', 'matter-lineage', ?, 'hash-fork', 'application/pdf', 'IMPORTED', 15, 15, 'document-old')`
+          )
+          .run(Buffer.from('v'))
+      ).toThrowError(/UNIQUE constraint failed/)
     } finally {
       upgraded.sqlite.close()
     }

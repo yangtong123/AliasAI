@@ -17,7 +17,8 @@ export class WorkspaceLifecycleRepositoryError extends Error {
       | 'TIMESTAMP_INVALID'
       | 'MATTER_BUSY'
       | 'DOCUMENT_BUSY'
-      | 'RESTORE_CONFLICT',
+      | 'RESTORE_CONFLICT'
+      | 'LINEAGE_CONFLICT',
     message: string,
     options?: ErrorOptions
   ) {
@@ -342,6 +343,21 @@ export class WorkspaceLifecycleRepository {
           'An active Document with the same file hash already exists in this Matter'
         )
       }
+      // Lineage is linear in V1: once a Document has been superseded — even if
+      // the replacement was later trashed or the old version restored — it can
+      // never be replaced again. The partial unique index backstops this.
+      const existingLineage = transaction
+        .select({ id: documents.id })
+        .from(documents)
+        .where(eq(documents.supersedesDocumentId, input.supersededDocumentId))
+        .limit(1)
+        .get()
+      if (existingLineage !== undefined) {
+        throw new WorkspaceLifecycleRepositoryError(
+          'LINEAGE_CONFLICT',
+          'This Document was already replaced; restore its replacement instead'
+        )
+      }
 
       // Trash the old row first so replacing a Document with the identical
       // file cannot trip the active-only partial unique index mid-transaction.
@@ -375,9 +391,12 @@ export class WorkspaceLifecycleRepository {
         transaction.insert(workspaceEvents).values(toEventInsert(input.event)).run()
       } catch (error) {
         if (isUniqueIndexViolation(error)) {
+          const lineageConflict = isLineageIndexViolation(error)
           throw new WorkspaceLifecycleRepositoryError(
-            'RESTORE_CONFLICT',
-            'An active Document with the same file hash already exists in this Matter',
+            lineageConflict ? 'LINEAGE_CONFLICT' : 'RESTORE_CONFLICT',
+            lineageConflict
+              ? 'This Document was already replaced; restore its replacement instead'
+              : 'An active Document with the same file hash already exists in this Matter',
             { cause: error }
           )
         }
@@ -510,6 +529,16 @@ export class WorkspaceLifecycleRepository {
 
 /** Parse stages that count as running work even without a ProcessingJob row. */
 const IN_FLIGHT_PARSE_STATUSES = ['PARSING', 'DETECTING', 'RESOLVING', 'SANITIZING'] as const
+
+/** Distinguishes the linear-lineage index from other unique violations. */
+function isLineageIndexViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    String((error as { readonly message?: unknown }).message).includes('uq_documents_supersedes')
+  )
+}
 
 /** Matches better-sqlite3 unique constraint failures on the partial index. */
 function isUniqueIndexViolation(error: unknown): boolean {

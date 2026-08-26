@@ -77,6 +77,11 @@ export const documents = sqliteTable(
     index('idx_documents_matter').on(table.matterId),
     index('idx_documents_matter_deleted').on(table.matterId, table.deletedAt),
     index('idx_documents_supersedes').on(table.supersedesDocumentId),
+    // Replacement lineage is linear in V1: one old Document is superseded by at
+    // most one replacement, ever — restored old versions cannot fork it.
+    uniqueIndex('uq_documents_supersedes')
+      .on(table.supersedesDocumentId)
+      .where(sql`${table.supersedesDocumentId} IS NOT NULL`),
     check('documents_page_count_positive', sql`${table.pageCount} IS NULL OR ${table.pageCount} >= 1`)
     // deleted_at ordering (null or >= created_at) is enforced by DB triggers in
     // the migrations, like the other trigger-only guarantees drizzle cannot express.

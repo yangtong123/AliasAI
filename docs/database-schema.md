@@ -50,7 +50,10 @@ state machine, and the trigger `documents_deleted_at_ordered_insert/update`
 rejects a value earlier than `created_at`.
 
 `supersedes_document_id` records one-step replacement lineage. Triggers reject
-self-references, cross-Matter lineage, and any later change of the value.
+self-references, cross-Matter lineage, and any later change of the value. The
+partial unique index `uq_documents_supersedes` (on non-null values) enforces
+linear lineage: an old Document is superseded by at most one replacement ever,
+even after restores.
 
 Unique (active Documents only, partial index):
 `(matter_id, file_hash) WHERE deleted_at IS NULL` — a trashed Document never
@@ -61,6 +64,7 @@ Indexes:
 - `idx_documents_matter(matter_id)`
 - `idx_documents_matter_deleted(matter_id, deleted_at)`
 - `idx_documents_supersedes(supersedes_document_id)`
+- Unique (partial): `supersedes_document_id WHERE supersedes_document_id IS NOT NULL`
 
 ### document_pages
 
@@ -370,7 +374,10 @@ Allowed event types: `MATTER_TRASHED`, `MATTER_RESTORED`, `DOCUMENT_TRASHED`,
 `document_id IS NULL`; Document events must have `document_id IS NOT NULL`
 (CHECK constraint). `DOCUMENT_REPLACED` must additionally carry
 `superseded_document_id` distinct from `document_id`, and no other event type
-may set it (CHECK constraint).
+may set it (CHECK constraint). The `workspace_events_replacement_lineage_insert`
+trigger also requires the event's `superseded_document_id` to equal the new
+Document's recorded `supersedes_document_id`, so an appended replacement event
+can never contradict the real lineage.
 
 Indexes:
 

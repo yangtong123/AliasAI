@@ -50,7 +50,7 @@ describe('renderer internationalization', () => {
     expect(screen.getByText('替换操作失败，请重试；原文档保持不变。')).toBeDefined()
     expect(screen.getByText('该事项的全部内容将从工作台消失，但可以在回收站中恢复。')).toBeDefined()
     expect(
-      screen.getByText('该事项中已存在内容相同的活动文档；请保留它，或先将它移入回收站再恢复旧文档。')
+      screen.getByText('该事项中已存在内容相同的活动文档；请先将它移入回收站后重试当前操作，或选择其他文件。')
     ).toBeDefined()
     expect(screen.getByText('文档正在处理或 AI 正在执行，请等待完成后再试。')).toBeDefined()
     expect(document.documentElement.lang).toBe('zh-CN')

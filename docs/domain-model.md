@@ -544,6 +544,11 @@ Rules:
   `DOCUMENT_REPLACED` event linking both IDs — or nothing. File inspection and
   hashing happen before the transaction, and a failed replacement leaves the
   old Document active.
+- Replacement lineage is linear: an old Document is superseded by at most one
+  replacement, ever. Restoring an old version does not allow replacing it
+  again — the operation fails with `LINEAGE_CONFLICT` and the database
+  enforces it with a partial unique index, which also guarantees every
+  `DOCUMENT_REPLACED` event matches the replacement's recorded lineage.
 - A replacement never copies Mentions, Entity assignments, processing jobs,
   sanitized artifacts, or AI executions; existing Entity data stays
   Matter-scoped and is proposed again through normal resolution.

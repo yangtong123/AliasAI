@@ -12,7 +12,11 @@
   rehydrates locally from Trash, and any failure — running work, a file that
   duplicates another active Document, an unreadable source, or a cancelled
   picker — leaves the old Document exactly as it was. Replacement documents
-  show a lineage marker in the workspace list.
+  show a lineage marker in the workspace list. Lineage is linear (replacing a
+  restored old version fails with `LINEAGE_CONFLICT` instead of forking the
+  version chain) and every replacement event is trigger-checked against the
+  replacement's recorded lineage, so the append-only audit trail can never
+  contradict the real version history.
 - Recoverable trash for Matters and Documents: per-item trash buttons with
   confirmation on the workspace lists, a dedicated Trash view with restore
   actions, and idempotent append-only `workspace_events` audit. Trashing never

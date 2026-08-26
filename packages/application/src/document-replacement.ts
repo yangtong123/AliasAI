@@ -17,6 +17,7 @@ export class DocumentReplacementError extends Error {
       | 'DOCUMENT_NOT_AVAILABLE'
       | 'DOCUMENT_BUSY'
       | 'RESTORE_CONFLICT'
+      | 'LINEAGE_CONFLICT'
       | 'REPLACE_OPERATION_FAILED',
     message: string,
     options?: ErrorOptions
@@ -47,6 +48,17 @@ export class DocumentReplacementService {
   ) {}
 
   async replaceFromPath(documentId: string, filePath: string): Promise<Document> {
+    try {
+      return await this.replaceUnchecked(documentId, filePath)
+    } catch (error) {
+      // Everything — pre-checks, clock and ID generation, inspection, and the
+      // transaction — funnels through one coded boundary so no raw failure
+      // degrades to INTERNAL_ERROR at IPC.
+      throw this.toApplicationError(error)
+    }
+  }
+
+  private async replaceUnchecked(documentId: string, filePath: string): Promise<Document> {
     // Fast pre-checks for friendly early errors; the transaction re-validates
     // authoritatively.
     const current = this.documents.findById(documentId)
@@ -71,41 +83,37 @@ export class DocumentReplacementService {
     const timestamp = this.now()
     const id = this.generateId(timestamp)
     const eventId = this.generateId(timestamp)
-    try {
-      return this.lifecycle.replaceDocument({
+    return this.lifecycle.replaceDocument({
+      supersededDocumentId: documentId,
+      replacement: {
+        id,
+        matterId: current.matterId,
+        originalNameCipher: encrypt(
+          Buffer.from(source.originalName, 'utf8'),
+          this.keys.persistenceKey,
+          documentOriginalNameContext(id)
+        ),
+        sourcePathCipher: encrypt(
+          Buffer.from(source.sourcePath, 'utf8'),
+          this.keys.persistenceKey,
+          documentSourcePathContext(id)
+        ),
+        fileHash: source.fileHash,
+        mimeType: source.mimeType,
+        parseStatus: 'IMPORTED',
+        createdAt: timestamp,
+        updatedAt: timestamp
+      },
+      event: {
+        id: eventId,
+        matterId: current.matterId,
+        documentId: id,
         supersededDocumentId: documentId,
-        replacement: {
-          id,
-          matterId: current.matterId,
-          originalNameCipher: encrypt(
-            Buffer.from(source.originalName, 'utf8'),
-            this.keys.persistenceKey,
-            documentOriginalNameContext(id)
-          ),
-          sourcePathCipher: encrypt(
-            Buffer.from(source.sourcePath, 'utf8'),
-            this.keys.persistenceKey,
-            documentSourcePathContext(id)
-          ),
-          fileHash: source.fileHash,
-          mimeType: source.mimeType,
-          parseStatus: 'IMPORTED',
-          createdAt: timestamp,
-          updatedAt: timestamp
-        },
-        event: {
-          id: eventId,
-          matterId: current.matterId,
-          documentId: id,
-          supersededDocumentId: documentId,
-          type: 'DOCUMENT_REPLACED',
-          actor: 'USER',
-          createdAt: timestamp
-        }
-      })
-    } catch (error) {
-      throw this.toApplicationError(error)
-    }
+        type: 'DOCUMENT_REPLACED',
+        actor: 'USER',
+        createdAt: timestamp
+      }
+    })
   }
 
   private toApplicationError(error: unknown): DocumentReplacementError {
@@ -124,6 +132,12 @@ export class DocumentReplacementService {
           return new DocumentReplacementError(
             'RESTORE_CONFLICT',
             'An active Document with the same file hash already exists',
+            { cause: error }
+          )
+        case 'LINEAGE_CONFLICT':
+          return new DocumentReplacementError(
+            'LINEAGE_CONFLICT',
+            'This Document was already replaced; restore its replacement instead',
             { cause: error }
           )
       }

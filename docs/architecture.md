@@ -183,7 +183,14 @@ Document sets `documents.deleted_at`. Both restore symmetrically.
   event linking both IDs. A failure rolls back and leaves the old Document
   active; a cancelled picker never reaches the transaction. Nothing is copied
   from the old Document, and Matter-scoped identity data keeps serving normal
-  resolution for the replacement.
+  resolution for the replacement. Lineage is linear by construction: the
+  partial unique index on `supersedes_document_id` rejects a second
+  replacement of the same old Document (surfaced as `LINEAGE_CONFLICT`), and a
+  trigger requires every `DOCUMENT_REPLACED` event to match the replacement's
+  recorded lineage so the append-only audit trail can never contradict it.
+  The whole service call funnels through one coded error boundary, so any
+  unexpected failure surfaces as `REPLACE_OPERATION_FAILED` rather than a
+  generic internal error.
 
 Known V1 limitations (deliberate):
 
