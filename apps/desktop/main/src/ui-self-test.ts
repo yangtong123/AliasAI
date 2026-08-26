@@ -157,7 +157,7 @@ const UI_DRIVER = String.raw`
   stage('pipeline-ready');
 
   document.querySelector('[title^="身份证号"]').click();
-  await setInput('新实体的主要别名', 'Holder One');
+  await setInput('新实体的化名（例如“原告甲”）', 'Holder One');
   await click('创建实体并分配');
   await waitFor(() => document.querySelector('.mention-detail strong')?.textContent === 'Holder One', 'ID assignment');
   await click('确认');
