@@ -67,39 +67,39 @@ export class DocumentImportService {
   ) {}
 
   async importFromPath(matterId: string, filePath: string): Promise<Document> {
+    // Fast pre-check for a friendly early error; the authoritative check runs
+    // inside the creation transaction below, so trashing the Matter during the
+    // async file inspection cannot leave a hidden Document behind.
     const matter = this.matters.findById(matterId)
     if (matter === undefined || matter.status === 'DELETED') {
       throw new DocumentImportError('MATTER_NOT_AVAILABLE', 'Matter is not available')
     }
     const source = await inspectDocumentSource(filePath)
-    // Active Documents only: a trashed match never blocks a fresh import.
-    const existing = this.documents.findByMatterAndFileHash(matterId, source.fileHash)
-    if (existing !== undefined) return existing
     const timestamp = this.now()
     const id = generateUuidV7(timestamp)
-    try {
-      return this.documents.create({
-        id,
-        matterId,
-        originalNameCipher: encrypt(
-          Buffer.from(source.originalName, 'utf8'),
-          this.keys.persistenceKey,
-          documentOriginalNameContext(id)
-        ),
-        sourcePathCipher: encrypt(
-          Buffer.from(source.sourcePath, 'utf8'),
-          this.keys.persistenceKey,
-          documentSourcePathContext(id)
-        ),
-        fileHash: source.fileHash,
-        mimeType: source.mimeType,
-        parseStatus: 'IMPORTED',
-        createdAt: timestamp,
-        updatedAt: timestamp
-      })
-    } catch (error) {
-      throw new DocumentImportError('IMPORT_FAILED', 'Document could not be imported', { cause: error })
+    const decision = this.documents.createInAvailableMatter({
+      id,
+      matterId,
+      originalNameCipher: encrypt(
+        Buffer.from(source.originalName, 'utf8'),
+        this.keys.persistenceKey,
+        documentOriginalNameContext(id)
+      ),
+      sourcePathCipher: encrypt(
+        Buffer.from(source.sourcePath, 'utf8'),
+        this.keys.persistenceKey,
+        documentSourcePathContext(id)
+      ),
+      fileHash: source.fileHash,
+      mimeType: source.mimeType,
+      parseStatus: 'IMPORTED',
+      createdAt: timestamp,
+      updatedAt: timestamp
+    })
+    if (decision.status === 'MATTER_UNAVAILABLE') {
+      throw new DocumentImportError('MATTER_NOT_AVAILABLE', 'Matter is not available')
     }
+    return decision.document
   }
 }
 

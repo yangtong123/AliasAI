@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { decrypt, encrypt } from '@aliasai/crypto'
 import {
   DocumentRepository,
@@ -25,9 +25,12 @@ import {
   DocumentImportService,
   DocumentProcessingService,
   MatterService,
+  WorkspaceLifecycleService,
   documentBlockTextContext,
+  type ApplicationKeys,
   type DocumentProcessor
 } from '../src/index'
+import { WorkspaceLifecycleRepository } from '@aliasai/database'
 
 function syntheticPdf(): Buffer {
   const content = 'BT /F1 11 Tf 24 84 Td (Synthetic native text) Tj ET'
@@ -143,6 +146,75 @@ describe('DocumentProcessingService', () => {
     )
     return { documentId: document.id, sourcePath }
   }
+
+  it('rejects trash while the document is mid-parse, then completes the parse cleanly', async () => {
+    const imported = await importSyntheticSource()
+    let releaseParser!: () => void
+    const paused = new Promise<void>((resolve) => {
+      releaseParser = resolve
+    })
+    const processor: DocumentProcessor = {
+      parserType: 'SYNTHETIC_PROTOCOL_PROCESSOR',
+      async processDocument(request, onEvent) {
+        await paused
+        const events: WorkerEvent[] = [
+          { protocolVersion: 1, type: 'started', jobId: request.jobId, documentId: request.documentId },
+          {
+            protocolVersion: 1,
+            type: 'page_result',
+            jobId: request.jobId,
+            documentId: request.documentId,
+            page: {
+              pageNo: 1,
+              originalWidth: 100,
+              originalHeight: 200,
+              rotation: 0,
+              sourceType: 'NATIVE',
+              blocks: []
+            }
+          }
+        ]
+        for (const event of events) await onEvent(event)
+        const completed = {
+          protocolVersion: 1 as const,
+          type: 'completed' as const,
+          jobId: request.jobId,
+          documentId: request.documentId,
+          pageCount: 1,
+          processedPages: 1
+        }
+        await onEvent(completed)
+        return completed
+      }
+    }
+    const service = new DocumentProcessingService(documents, processor, { persistenceKey: key }, now)
+    const lifecycle = new WorkspaceLifecycleService(
+      new WorkspaceLifecycleRepository(db),
+      documents,
+      new MatterRepository(db),
+      { persistenceKey: key } satisfies ApplicationKeys,
+      now
+    )
+
+    const processing = service.process(imported.documentId)
+    // While the worker holds the parse open (PARSING, no ProcessingJob row),
+    // neither the Document nor its Matter may move to trash.
+    await vi.waitFor(() => {
+      expect(documents.findById(imported.documentId)?.parseStatus).toBe('PARSING')
+    })
+    expect(() => lifecycle.trashDocument(imported.documentId)).toThrow(
+      expect.objectContaining({ code: 'DOCUMENT_BUSY' })
+    )
+    expect(() => lifecycle.trashMatter((documents.findById(imported.documentId) as { matterId: string }).matterId)).toThrow(
+      expect.objectContaining({ code: 'DOCUMENT_BUSY' })
+    )
+    expect(documents.findById(imported.documentId)?.deletedAt).toBeUndefined()
+
+    releaseParser()
+    const completedDocument = await processing
+    expect(completedDocument.parseStatus).toBe('PARSED')
+    expect(documents.findById(imported.documentId)?.deletedAt).toBeUndefined()
+  })
 
   it('uses an engine-independent processor and persists only encrypted block text', async () => {
     const imported = await importSyntheticSource()

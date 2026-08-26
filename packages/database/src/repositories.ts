@@ -83,6 +83,12 @@ export interface CreateDocumentInput {
   readonly updatedAt: number
 }
 
+/** One atomic import decision: matter availability, active dedup, creation. */
+export type ImportDecision =
+  | { readonly status: 'MATTER_UNAVAILABLE' }
+  | { readonly status: 'REUSED'; readonly document: Document }
+  | { readonly status: 'CREATED'; readonly document: Document }
+
 export interface DocumentProcessingSource {
   readonly document: Document
   readonly sourcePathCipher?: Buffer
@@ -162,6 +168,54 @@ export class DocumentRepository {
     return document
   }
 
+  /**
+   * Import decision in one transaction: the Matter must be available (checked
+   * here, not before the async file inspection, so trashing the Matter during
+   * inspection cannot leave a hidden Document behind), an active same-hash
+   * Document is reused, otherwise the new Document is created. The caller's
+   * candidate ID is ignored on reuse.
+   */
+  createInAvailableMatter(input: CreateDocumentInput): ImportDecision {
+    return this.db.transaction((transaction) => {
+      const matter = transaction
+        .select({ status: matters.status })
+        .from(matters)
+        .where(eq(matters.id, input.matterId))
+        .get()
+      if (matter === undefined || matter.status === 'DELETED') {
+        return { status: 'MATTER_UNAVAILABLE' } as const
+      }
+      const existing = transaction
+        .select()
+        .from(documents)
+        .where(
+          and(
+            eq(documents.matterId, input.matterId),
+            eq(documents.fileHash, input.fileHash),
+            isNull(documents.deletedAt)
+          )
+        )
+        .get()
+      if (existing !== undefined) {
+        return { status: 'REUSED', document: toDocument(existing) } as const
+      }
+      const document: Document = {
+        id: input.id,
+        matterId: input.matterId,
+        fileHash: input.fileHash,
+        mimeType: input.mimeType,
+        ...(input.pageCount === undefined ? {} : { pageCount: input.pageCount }),
+        ...(input.parserType === undefined ? {} : { parserType: input.parserType }),
+        parseStatus: input.parseStatus,
+        createdAt: input.createdAt,
+        updatedAt: input.updatedAt
+      }
+      assertDocument(document)
+      transaction.insert(documents).values(input).run()
+      return { status: 'CREATED', document } as const
+    })
+  }
+
   /** Import deduplication: only an active Document with this hash is reused. */
   findByMatterAndFileHash(matterId: string, fileHash: string): Document | undefined {
     const row = this.db
@@ -211,31 +265,47 @@ export class DocumentRepository {
 
   markProcessing(documentId: string, parserType: string, updatedAt: number): Document {
     if (parserType.trim().length === 0) throw new Error('parserType must not be empty')
-    const current = this.findById(documentId)
-    if (current === undefined) throw new Error('Document was not found')
-    if (current.deletedAt !== undefined) throw new Error('Document is not available for processing')
-    if (updatedAt < current.updatedAt) throw new Error('Document processing timestamp must not move backwards')
-    if (
-      current.parseStatus === 'FAILED' &&
-      this.db.select({ id: documentPages.id }).from(documentPages).where(eq(documentPages.documentId, documentId)).limit(1).get() !==
-        undefined
-    ) {
-      throw new Error('A failed downstream stage cannot be retried as document parsing')
-    }
+    return this.db.transaction((transaction) => {
+      const row = transaction
+        .select({ document: documents, matterStatus: matters.status })
+        .from(documents)
+        .innerJoin(matters, eq(matters.id, documents.matterId))
+        .where(eq(documents.id, documentId))
+        .get()
+      if (row === undefined) throw new Error('Document was not found')
+      if (row.document.deletedAt !== null || row.matterStatus === 'DELETED') {
+        throw new Error('Document is not available for processing')
+      }
+      const current = toDocument(row.document)
+      if (updatedAt < current.updatedAt) throw new Error('Document processing timestamp must not move backwards')
+      if (
+        current.parseStatus === 'FAILED' &&
+        transaction
+          .select({ id: documentPages.id })
+          .from(documentPages)
+          .where(eq(documentPages.documentId, documentId))
+          .limit(1)
+          .get() !== undefined
+      ) {
+        throw new Error('A failed downstream stage cannot be retried as document parsing')
+      }
 
-    const result = this.db
-      .update(documents)
-      .set({ parseStatus: 'PARSING', parserType, pageCount: null, updatedAt })
-      .where(
-        and(
-          eq(documents.id, documentId),
-          isNull(documents.deletedAt),
-          inArray(documents.parseStatus, ['IMPORTED', 'FAILED'])
+      const result = transaction
+        .update(documents)
+        .set({ parseStatus: 'PARSING', parserType, pageCount: null, updatedAt })
+        .where(
+          and(
+            eq(documents.id, documentId),
+            isNull(documents.deletedAt),
+            inArray(documents.parseStatus, ['IMPORTED', 'FAILED'])
+          )
         )
-      )
-      .run()
-    if (result.changes !== 1) throw new Error('Document is not available for processing')
-    return this.requireById(documentId)
+        .run()
+      if (result.changes !== 1) throw new Error('Document is not available for processing')
+      const processing = transaction.select().from(documents).where(eq(documents.id, documentId)).get()
+      if (processing === undefined) throw new Error('Document was not found')
+      return toDocument(processing)
+    })
   }
 
   markProcessingFailed(documentId: string, updatedAt: number): Document {
@@ -285,6 +355,11 @@ export class DocumentRepository {
     return this.db.transaction((transaction) => {
       const current = transaction.select().from(documents).where(eq(documents.id, input.documentId)).get()
       if (current === undefined) throw new Error('Document was not found')
+      // The document may have been trashed (or its Matter deleted) while the
+      // worker was running; never commit parsed content into the trash.
+      if (current.deletedAt !== null || !matterIsAvailable(transaction, current.matterId)) {
+        throw new Error('Document is not available for processing')
+      }
       if (current.parseStatus !== 'PARSING') throw new Error('Document is not currently processing')
       if (input.updatedAt < current.updatedAt) throw new Error('Document processing timestamp must not move backwards')
 
@@ -394,7 +469,7 @@ export class PrivacyDetectionRepository {
       .select({ document: documents })
       .from(documents)
       .innerJoin(matters, eq(matters.id, documents.matterId))
-      .where(eq(documents.id, documentId))
+      .where(and(eq(documents.id, documentId), ne(matters.status, 'DELETED')))
       .get()
     if (
       documentRow === undefined ||
@@ -890,9 +965,29 @@ function toResolutionMentionSource(row: MentionRow): ResolutionMentionSource {
  * state from the persisted artifact. Enforced inside the mutation transaction,
  * not just in the renderer.
  */
-function assertDocumentReviewMutable(parseStatus: string): void {
-  if (parseStatus === 'SANITIZING' || parseStatus === 'SANITIZED') {
+/**
+ * Review writes require an active Document in an available Matter. Checking
+ * only parseStatus would let a trashed Document (or one inside a deleted
+ * Matter) still be mutated through stale renderer IDs.
+ */
+function assertDocumentReviewMutable(row: {
+  readonly parseStatus: string
+  readonly deletedAt: number | null
+  readonly matterStatus: string
+}): void {
+  if (row.deletedAt !== null || row.matterStatus === 'DELETED') {
+    throw new Error('Document is not available for review changes')
+  }
+  if (row.parseStatus === 'SANITIZING' || row.parseStatus === 'SANITIZED') {
     throw new Error('Document review is closed after sanitization')
+  }
+}
+
+/** Entity-level review writes require a Matter that is not in the trash. */
+function assertMatterReviewMutable(transaction: TransactionLike, matterId: string): void {
+  const row = transaction.select({ status: matters.status }).from(matters).where(eq(matters.id, matterId)).get()
+  if (row === undefined || row.status === 'DELETED') {
+    throw new Error('Matter is not available for review changes')
   }
 }
 
@@ -1289,7 +1384,7 @@ export class EntityResolutionRepository {
       .select({ document: documents })
       .from(documents)
       .innerJoin(matters, eq(matters.id, documents.matterId))
-      .where(eq(documents.id, documentId))
+      .where(and(eq(documents.id, documentId), ne(matters.status, 'DELETED')))
       .get()
     if (
       documentRow === undefined ||
@@ -1792,12 +1887,13 @@ export class EntityResolutionRepository {
       const entityRow = transaction.select().from(entities).where(eq(entities.id, input.entityId)).get()
       if (entityRow === undefined) throw new Error('Entity was not found')
       const documentRow = transaction
-        .select({ parseStatus: documents.parseStatus })
+        .select({ parseStatus: documents.parseStatus, deletedAt: documents.deletedAt, matterStatus: matters.status })
         .from(documents)
+        .innerJoin(matters, eq(matters.id, documents.matterId))
         .where(eq(documents.id, mentionRow.documentId))
         .get()
       if (documentRow === undefined) throw new Error('Mention Document was not found')
-      assertDocumentReviewMutable(documentRow.parseStatus)
+      assertDocumentReviewMutable(documentRow)
 
       const mention = toMention(mentionRow)
       const assigned = assignMentionToEntity(mention, toEntity(entityRow))
@@ -1913,12 +2009,13 @@ export class EntityResolutionRepository {
       const mentionRow = transaction.select().from(mentions).where(eq(mentions.id, input.mentionId)).get()
       if (mentionRow === undefined) throw new Error('Mention was not found')
       const documentRow = transaction
-        .select({ parseStatus: documents.parseStatus })
+        .select({ parseStatus: documents.parseStatus, deletedAt: documents.deletedAt, matterStatus: matters.status })
         .from(documents)
+        .innerJoin(matters, eq(matters.id, documents.matterId))
         .where(eq(documents.id, mentionRow.documentId))
         .get()
       if (documentRow === undefined) throw new Error('Mention Document was not found')
-      assertDocumentReviewMutable(documentRow.parseStatus)
+      assertDocumentReviewMutable(documentRow)
 
       const mention = toMention(mentionRow)
       const confirmed = confirmMentionAssignment(mention)
@@ -2007,12 +2104,13 @@ export class EntityResolutionRepository {
         throw new Error('Resolution event must belong to the Mention Matter')
       }
       const documentRow = transaction
-        .select({ parseStatus: documents.parseStatus })
+        .select({ parseStatus: documents.parseStatus, deletedAt: documents.deletedAt, matterStatus: matters.status })
         .from(documents)
+        .innerJoin(matters, eq(matters.id, documents.matterId))
         .where(eq(documents.id, mentionRow.documentId))
         .get()
       if (documentRow === undefined) throw new Error('Mention Document was not found')
-      assertDocumentReviewMutable(documentRow.parseStatus)
+      assertDocumentReviewMutable(documentRow)
       const mention = toMention(mentionRow)
       const assigned = assignMentionToEntity(mention, entity)
       const expectedType = mention.entityId === undefined ? 'MENTION_ASSIGNED' : 'MENTION_REASSIGNED'
@@ -2129,6 +2227,7 @@ export class EntityResolutionRepository {
         throw new Error('Active Entity was not found in the Matter')
       }
       if (input.event.matterId !== entity.matterId) throw new Error('Rename event must belong to the Entity Matter')
+      assertMatterReviewMutable(transaction, entity.matterId)
       const existingAlias = transaction
         .select()
         .from(entityAliases)
@@ -2173,9 +2272,14 @@ export class EntityResolutionRepository {
     return this.db.transaction((transaction) => {
       const row = transaction.select().from(mentions).where(eq(mentions.id, input.mentionId)).get()
       if (row === undefined || input.event.matterId !== row.matterId) throw new Error('Mention was not found in the event Matter')
-      const document = transaction.select().from(documents).where(eq(documents.id, row.documentId)).get()
+      const document = transaction
+        .select({ parseStatus: documents.parseStatus, deletedAt: documents.deletedAt, matterStatus: matters.status })
+        .from(documents)
+        .innerJoin(matters, eq(matters.id, documents.matterId))
+        .where(eq(documents.id, row.documentId))
+        .get()
       if (document === undefined) throw new Error('Mention Document was not found')
-      assertDocumentReviewMutable(document.parseStatus)
+      assertDocumentReviewMutable(document)
       if (row.entityId !== null && row.protectedValueId !== null) {
         const otherEvidence = transaction
           .select({ id: mentions.id })
@@ -2238,6 +2342,7 @@ export class EntityResolutionRepository {
         throw new Error('Merge requires two active same-type Entities in one Matter')
       }
       if (input.event.matterId !== source.matterId) throw new Error('Merge event must belong to the Entity Matter')
+      assertMatterReviewMutable(transaction, source.matterId)
       const prohibited = transaction
         .select({ id: entityConstraints.id })
         .from(entityConstraints)
@@ -2251,12 +2356,13 @@ export class EntityResolutionRepository {
         .get()
       if (prohibited !== undefined) throw new Error('Cannot-Link constraint prohibits this merge')
       const affectedDocuments = transaction
-        .select({ parseStatus: documents.parseStatus })
+        .select({ parseStatus: documents.parseStatus, deletedAt: documents.deletedAt, matterStatus: matters.status })
         .from(mentions)
         .innerJoin(documents, eq(documents.id, mentions.documentId))
+        .innerJoin(matters, eq(matters.id, documents.matterId))
         .where(eq(mentions.entityId, source.id))
         .all()
-      for (const document of affectedDocuments) assertDocumentReviewMutable(document.parseStatus)
+      for (const document of affectedDocuments) assertDocumentReviewMutable(document)
       const sourceLinks = transaction
         .select()
         .from(entityProtectedValues)
@@ -2392,14 +2498,23 @@ export class EntityResolutionRepository {
     }
     return this.db.transaction((transaction) => {
       const block = transaction.select().from(documentBlocks).where(eq(documentBlocks.id, input.mention.blockId)).get()
-      const document = transaction.select().from(documents).where(eq(documents.id, input.mention.documentId)).get()
+      const document = transaction
+        .select({ document: documents, matterStatus: matters.status })
+        .from(documents)
+        .innerJoin(matters, eq(matters.id, documents.matterId))
+        .where(eq(documents.id, input.mention.documentId))
+        .get()
       if (
-        block === undefined || document === undefined || block.documentId !== document.id ||
-        block.pageId !== input.mention.pageId || document.matterId !== input.mention.matterId
+        block === undefined || document === undefined || block.documentId !== document.document.id ||
+        block.pageId !== input.mention.pageId || document.document.matterId !== input.mention.matterId
       ) {
         throw new Error('Manual Mention scope does not match its Document Block')
       }
-      assertDocumentReviewMutable(document.parseStatus)
+      assertDocumentReviewMutable({
+        parseStatus: document.document.parseStatus,
+        deletedAt: document.document.deletedAt,
+        matterStatus: document.matterStatus
+      })
       const overlapping = transaction
         .select({ startOffset: mentions.startOffset, endOffset: mentions.endOffset })
         .from(mentions)
@@ -2466,6 +2581,7 @@ export class EntityResolutionRepository {
           throw new Error('Constrained Entities must be active')
         }
       }
+      assertMatterReviewMutable(transaction, constraint.matterId)
       transaction
         .insert(entityConstraints)
         .values({
@@ -2628,7 +2744,7 @@ export class SanitizationRepository {
       .select({ document: documents })
       .from(documents)
       .innerJoin(matters, eq(matters.id, documents.matterId))
-      .where(eq(documents.id, documentId))
+      .where(and(eq(documents.id, documentId), ne(matters.status, 'DELETED')))
       .get()
     if (
       documentRow === undefined ||

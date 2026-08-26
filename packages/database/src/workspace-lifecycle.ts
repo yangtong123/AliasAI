@@ -296,6 +296,22 @@ export class WorkspaceLifecycleRepository {
   }
 
   private assertMatterIdle(transaction: Parameters<Parameters<AliasAiDatabase['transaction']>[0]>[0], matterId: string): void {
+    // Native PDF parsing runs without a ProcessingJob row; any document in an
+    // in-flight stage counts as running work even without a job record.
+    const inFlightDocument = transaction
+      .select({ id: documents.id })
+      .from(documents)
+      .where(
+        and(
+          eq(documents.matterId, matterId),
+          inArray(documents.parseStatus, [...IN_FLIGHT_PARSE_STATUSES])
+        )
+      )
+      .limit(1)
+      .get()
+    if (inFlightDocument !== undefined) {
+      throw new WorkspaceLifecycleRepositoryError('MATTER_BUSY', 'Matter has running processing work')
+    }
     const runningJob = transaction
       .select({ id: processingJobs.id })
       .from(processingJobs)
@@ -326,6 +342,19 @@ export class WorkspaceLifecycleRepository {
     transaction: Parameters<Parameters<AliasAiDatabase['transaction']>[0]>[0],
     documentId: string
   ): void {
+    // Native PDF parsing runs without a ProcessingJob row; the in-flight
+    // parse status is the only durable signal that parsing work is running.
+    const inFlight = transaction
+      .select({ parseStatus: documents.parseStatus })
+      .from(documents)
+      .where(eq(documents.id, documentId))
+      .get()
+    if (
+      inFlight !== undefined &&
+      (IN_FLIGHT_PARSE_STATUSES as readonly string[]).includes(inFlight.parseStatus)
+    ) {
+      throw new WorkspaceLifecycleRepositoryError('DOCUMENT_BUSY', 'Document has running processing work')
+    }
     const runningJob = transaction
       .select({ id: processingJobs.id })
       .from(processingJobs)
@@ -347,6 +376,9 @@ export class WorkspaceLifecycleRepository {
     }
   }
 }
+
+/** Parse stages that count as running work even without a ProcessingJob row. */
+const IN_FLIGHT_PARSE_STATUSES = ['PARSING', 'DETECTING', 'RESOLVING', 'SANITIZING'] as const
 
 /** Matches better-sqlite3 unique constraint failures on the partial index. */
 function isUniqueIndexViolation(error: unknown): boolean {

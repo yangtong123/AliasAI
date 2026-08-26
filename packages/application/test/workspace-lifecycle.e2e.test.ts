@@ -150,6 +150,11 @@ describe('workspace trash end to end', () => {
     expect(oldPreview.status).toBe('AVAILABLE')
     if (oldPreview.status !== 'AVAILABLE') throw new Error('old preview should be available')
     const sanitizedDocumentId = oldPreview.sanitizedDocumentId
+    // The real sanitized text (aliases plus value-level tokens) anchors the
+    // historical-rehydration assertions below.
+    const sanitizedText = oldPreview.blocks.map((block) => block.text).join('\n\n')
+    expect(sanitizedText).not.toContain('110101199003077774')
+    expect(sanitizedText).not.toContain('synthetic@example.test')
 
     // Trash: the Document disappears from the normal workspace but its
     // sanitized artifact still rehydrates locally through historical reads.
@@ -158,10 +163,12 @@ describe('workspace trash end to end', () => {
     expect(() => preview.getPreview(oldDocumentId)).toThrowError(/not available/)
     const rehydratedWhileTrashed = preview.rehydrateDemo({
       sanitizedDocumentId,
-      text: '当事人:身份证号〔@I-0000000000000000〕',
+      text: `当事人: ${sanitizedText}`,
       includeRestoreOnRequest: true
     })
-    expect(rehydratedWhileTrashed.unresolvedTokens).toEqual(['@I-0000000000000000'])
+    expect(rehydratedWhileTrashed.text).toContain('110101199003077774')
+    expect(rehydratedWhileTrashed.text).toContain('synthetic@example.test')
+    expect(rehydratedWhileTrashed.unresolvedTokens).toEqual([])
 
     // Re-importing the identical PDF creates a new active Document with a new
     // ID while the old copy stays in trash.
@@ -177,15 +184,18 @@ describe('workspace trash end to end', () => {
     expect(reviewQuery.listDocuments(matter.id).map((item) => item.id)).toEqual([oldDocumentId])
     expect(lifecycle.listTrash().documents.map((item) => item.id)).toEqual([reimported.id])
 
-    // The original sanitized artifact still rehydrates after restore.
+    // The original sanitized artifact still rehydrates after restore: the
+    // value-level restoration tokens recover both source values in full.
     const restoredPreview = preview.getPreview(oldDocumentId)
     expect(restoredPreview.status).toBe('AVAILABLE')
     const rehydratedAfterRestore = preview.rehydrateDemo({
       sanitizedDocumentId,
-      text: '当事人:身份证号〔@I-0000000000000000〕',
+      text: `当事人: ${sanitizedText}`,
       includeRestoreOnRequest: true
     })
-    expect(rehydratedAfterRestore.unresolvedTokens).toEqual(['@I-0000000000000000'])
+    expect(rehydratedAfterRestore.text).toContain('110101199003077774')
+    expect(rehydratedAfterRestore.text).toContain('synthetic@example.test')
+    expect(rehydratedAfterRestore.unresolvedTokens).toEqual([])
 
     // Every real transition appended exactly one workspace event.
     const events = sqlite

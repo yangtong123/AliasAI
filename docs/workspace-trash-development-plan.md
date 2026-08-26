@@ -1,6 +1,6 @@
 # Workspace Trash and Document Replacement Development Plan
 
-Status: Milestone 1 implemented (2026-08-26)  
+Status: Milestone 1 implemented (2026-08-26)
 Last updated: 2026-08-26
 
 ## Goal

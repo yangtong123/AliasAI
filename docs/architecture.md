@@ -145,12 +145,26 @@ Document sets `documents.deleted_at`. Both restore symmetrically.
   filters and sometimes retains deleted data.
 - **Lifecycle transaction boundary**: every trash/restore is one SQLite
   transaction inside `WorkspaceLifecycleRepository` — validate scope, reject
-  running ProcessingJobs/AiExecutions, flip the lifecycle state, and append
-  exactly one user-authored `workspace_events` row (append-only, like
-  resolution events). Idempotent no-ops change nothing and append nothing.
-  Restoring a Document checks for an active same-hash conflict first and
-  converts a concurrent partial-index collision into `RESTORE_CONFLICT`, so no
-  partial state or event survives a failed restore.
+  running work (PENDING/RUNNING jobs, RUNNING executions, and any Document in
+  an in-flight parse stage, since native PDF parsing runs without a
+  ProcessingJob row), flip the lifecycle state, and append exactly one
+  user-authored `workspace_events` row (append-only, like resolution events).
+  Idempotent no-ops change nothing and append nothing. Restoring a Document
+  checks for an active same-hash conflict first and converts a concurrent
+  partial-index collision into `RESTORE_CONFLICT`, so no partial state or
+  event survives a failed restore.
+- **Lifecycle guards on every write path**: parsing re-validates Document and
+  Matter availability inside both `markProcessing` and the
+  `completeProcessing` commit transaction, so a Document trashed mid-parse
+  never receives Pages or Blocks; import decides matter availability, active
+  deduplication, and creation inside one transaction, so trashing a Matter
+  during async file inspection cannot leave a hidden Document; and review
+  writes (assign, confirm, create-and-assign, reject, manual Mention, rename,
+  merge, constraint) verify inside their own transactions that the target
+  Document is not trashed and its Matter is not deleted, so stale renderer IDs
+  cannot mutate trashed data or append resolution events. Completed-stage
+  fast paths (`findCompleted`) apply the same filters, so reuse never resurfaces
+  trashed data.
 - **Same-file re-import**: uniqueness is a partial index on
   `(matter_id, file_hash) WHERE deleted_at IS NULL`. A trashed Document never
   blocks importing the same file as a new active Document with a new ID;

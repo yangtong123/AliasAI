@@ -13,9 +13,14 @@
   never blocks importing the identical file as a new Document with a new ID;
   active duplicate imports remain idempotent and file names never participate
   in uniqueness.
-- Running work (PENDING/RUNNING ProcessingJobs, RUNNING AI executions) blocks
-  trash with a coded `DOCUMENT_BUSY` error; restoring over an active same-hash
-  Document fails atomically with `RESTORE_CONFLICT` and no partial writes.
+- Running work blocks trash with a coded `DOCUMENT_BUSY` error — including a
+  Document mid-parse (native PDF parsing has no ProcessingJob row) — and
+  parsing, import, and review writes all re-validate lifecycle state inside
+  their write transactions, so a Matter trashed mid-inspection cannot gain a
+  hidden Document, a Document trashed mid-parse cannot receive Pages/Blocks,
+  and stale renderer IDs cannot mutate trashed data or append resolution
+  events. Restoring over an active same-hash Document fails atomically with
+  `RESTORE_CONFLICT` and no partial writes.
 - Normal lists and the processing/detection/resolution/sanitization/preview/AI
   start paths exclude trashed Documents and deleted Matters; historical reads
   for local rehydration and audit remain available through explicitly named
