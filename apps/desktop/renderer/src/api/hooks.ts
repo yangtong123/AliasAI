@@ -4,7 +4,8 @@ import type {
   DocumentSummaryDTO,
   JobSummaryDTO,
   MatterSummaryDTO,
-  SanitizedPreview
+  SanitizedPreview,
+  WorkspaceTrashDTO
 } from '@aliasai/application'
 import type { AliasAiInvokeMap } from '../../../main/src/ipc/contract'
 import { invoke, UiError } from './client'
@@ -187,6 +188,41 @@ export function useSanitizedPreview(
   }, [documentId, refreshKey])
 
   return { preview, error }
+}
+
+/** Dedicated trash read path: deleted Matters and individually trashed Documents. */
+export function useTrash(refreshKey = 0): {
+  readonly trash: WorkspaceTrashDTO | null
+  readonly loaded: boolean
+  readonly error: UiError | null
+} {
+  const [trash, setTrash] = useState<WorkspaceTrashDTO | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [error, setError] = useState<UiError | null>(null)
+
+  useEffect(() => {
+    let active = true
+    setLoaded(false)
+    setError(null)
+    invoke('trash:list', {})
+      .then((result) => {
+        if (active) {
+          setTrash(result)
+          setLoaded(true)
+        }
+      })
+      .catch((failure: unknown) => {
+        if (active) {
+          setError(failure instanceof UiError ? failure : null)
+          setLoaded(true)
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [refreshKey])
+
+  return { trash, loaded, error }
 }
 
 /** Loads the non-sensitive provider configuration (key presence only). */

@@ -65,7 +65,7 @@ describe('App workspace recovery', () => {
 
     renderInEnglish(<App />)
     await user.click(await screen.findByRole('button', { name: 'Matter One' }))
-    await user.click(await screen.findByRole('button', { name: /synthetic\.pdf/ }))
+    await user.click(await screen.findByRole('button', { name: /^synthetic\.pdf/ }))
     expect(await screen.findByRole('heading', { name: 'synthetic.pdf' })).toBeDefined()
 
     await user.click(screen.getByRole('button', { name: 'Matter Two' }))
@@ -149,6 +149,140 @@ describe('App settings navigation lock', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Settings' })).toHaveProperty('disabled', false)
       expect(screen.getByRole('button', { name: 'Back to workspace' })).toHaveProperty('disabled', false)
+    })
+  })
+})
+
+describe('App trash flows', () => {
+  const invoke = vi.fn()
+
+  beforeEach(() => {
+    invoke.mockReset()
+    localStorage.clear()
+    ;(window as { aliasAi: unknown }).aliasAi = { invoke }
+  })
+
+  afterEach(() => {
+    cleanup()
+    localStorage.clear()
+    vi.restoreAllMocks()
+  })
+
+  function installTrashableWorkspace(): void {
+    invoke.mockImplementation((channel: string, payload: Record<string, string>) => {
+      if (channel === 'matter:list') return Promise.resolve({ ok: true, data: [matterOne] })
+      if (channel === 'document:list') return Promise.resolve({ ok: true, data: [documentOne] })
+      if (channel === 'document:get') return Promise.resolve({ ok: true, data: { document: documentOne, jobs: [] } })
+      if (channel === 'trash:list') return Promise.resolve({ ok: true, data: { matters: [], documents: [] } })
+      if (channel === 'matter:trash') return Promise.resolve({ ok: true, data: { changed: true } })
+      if (channel === 'document:trash') return Promise.resolve({ ok: true, data: { changed: true } })
+      void payload
+      return Promise.resolve({ ok: true, data: null })
+    })
+  }
+
+  it('confirms before trashing and cancels without a request', async () => {
+    installTrashableWorkspace()
+    const user = userEvent.setup()
+    renderInEnglish(<App />)
+
+    await user.click(await screen.findByRole('button', { name: 'Move matter to trash: Matter One' }))
+    expect(screen.getByText(/All contents of this matter will disappear/)).toBeDefined()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'matter:trash')).toHaveLength(0)
+    expect(screen.getByRole('button', { name: 'Move matter to trash: Matter One' })).toBeDefined()
+  })
+
+  it('trashes a selected Matter, clears selection and local storage, and refreshes', async () => {
+    installTrashableWorkspace()
+    localStorage.setItem('aliasai.lastMatterId', 'matter-1')
+    localStorage.setItem('aliasai.lastDocumentId', 'document-1')
+    const user = userEvent.setup()
+    renderInEnglish(<App />)
+    await user.click(await screen.findByRole('button', { name: 'Matter One' }))
+    await user.click(await screen.findByRole('button', { name: /^synthetic\.pdf/ }))
+    expect(await screen.findByRole('heading', { name: 'synthetic.pdf' })).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Move matter to trash: Matter One' }))
+    await user.click(screen.getByRole('button', { name: 'Move to trash' }))
+
+    await waitFor(() => {
+      expect(invoke.mock.calls.filter(([channel]) => channel === 'matter:trash')).toHaveLength(1)
+    })
+    expect(await screen.findByText('Select a matter and document')).toBeDefined()
+    expect(screen.queryByRole('heading', { name: 'synthetic.pdf' })).toBeNull()
+    expect(localStorage.getItem('aliasai.lastMatterId')).toBeNull()
+    expect(localStorage.getItem('aliasai.lastDocumentId')).toBeNull()
+    // Normal lists refreshed after the mutation.
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'matter:list').length).toBeGreaterThan(1)
+  })
+
+  it('trashes a selected Document and clears only the document selection', async () => {
+    installTrashableWorkspace()
+    const user = userEvent.setup()
+    renderInEnglish(<App />)
+    await user.click(await screen.findByRole('button', { name: 'Matter One' }))
+    await user.click(await screen.findByRole('button', { name: /^synthetic\.pdf/ }))
+    expect(await screen.findByRole('heading', { name: 'synthetic.pdf' })).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Move document to trash: synthetic.pdf' }))
+    await user.click(screen.getByRole('button', { name: 'Move to trash' }))
+
+    await waitFor(() => {
+      expect(invoke.mock.calls.filter(([channel]) => channel === 'document:trash')).toHaveLength(1)
+    })
+    expect(await screen.findByText('Select a matter and document')).toBeDefined()
+    expect(localStorage.getItem('aliasai.lastDocumentId')).toBeNull()
+  })
+
+  it('shows an actionable error when the trash mutation fails', async () => {
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'matter:list') return Promise.resolve({ ok: true, data: [matterOne] })
+      if (channel === 'document:list') return Promise.resolve({ ok: true, data: [] })
+      if (channel === 'trash:list') return Promise.resolve({ ok: true, data: { matters: [], documents: [] } })
+      if (channel === 'matter:trash') {
+        return Promise.resolve({ ok: false, error: { code: 'DOCUMENT_BUSY', message: 'Document has running work' } })
+      }
+      return Promise.resolve({ ok: true, data: null })
+    })
+    const user = userEvent.setup()
+    renderInEnglish(<App />)
+
+    await user.click(await screen.findByRole('button', { name: 'Move matter to trash: Matter One' }))
+    await user.click(screen.getByRole('button', { name: 'Move to trash' }))
+
+    expect(await screen.findByText('Document has running work')).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Matter One' })).toBeDefined()
+  })
+
+  it('opens the trash view from the header and restores an item', async () => {
+    invoke.mockImplementation((channel: string, payload: Record<string, string>) => {
+      if (channel === 'matter:list') return Promise.resolve({ ok: true, data: [] })
+      if (channel === 'document:list') return Promise.resolve({ ok: true, data: [] })
+      if (channel === 'trash:list') {
+        return Promise.resolve({
+          ok: true,
+          data: {
+            matters: [{ id: 'matter-1', name: 'Deleted Matter', deletedAt: 1_725_000_000_000, createdAt: 1 }],
+            documents: []
+          }
+        })
+      }
+      if (channel === 'matter:restore') return Promise.resolve({ ok: true, data: { changed: true } })
+      void payload
+      return Promise.resolve({ ok: true, data: null })
+    })
+    const user = userEvent.setup()
+    renderInEnglish(<App />)
+
+    await user.click(await screen.findByRole('button', { name: 'Trash' }))
+    expect(await screen.findByRole('heading', { name: 'Trash' })).toBeDefined()
+    expect(await screen.findByText('Deleted Matter')).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Restore matter: Deleted Matter' }))
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('matter:restore', { matterId: 'matter-1' })
     })
   })
 })

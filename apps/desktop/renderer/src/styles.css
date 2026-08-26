@@ -316,3 +316,49 @@ button.danger {
   flex-wrap: wrap;
   margin: 12px 0;
 }
+
+.item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.item-row > button:first-child {
+  flex: 1;
+  text-align: left;
+}
+
+.trash-button {
+  flex-shrink: 0;
+}
+
+.trash-confirm {
+  border: 1px solid #263650;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 4px 0;
+}
+
+.trash-confirm-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.trash-view {
+  max-width: 720px;
+}
+
+.trash-view h3 {
+  margin-top: 20px;
+}
+
+.trash-view li {
+  padding: 6px 8px;
+}
+
+.trash-meta {
+  color: #8ba6c9;
+  font-size: 0.85rem;
+}

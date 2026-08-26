@@ -6,9 +6,10 @@ import { MatterList } from './components/MatterList'
 import { PipelineControls } from './components/PipelineControls'
 import { ProviderSettingsPage } from './components/ProviderSettingsPage'
 import { SanitizedPreviewView } from './components/SanitizedPreview'
+import { TrashView } from './components/TrashView'
 import { useI18n } from './i18n'
 
-type View = 'review' | 'preview' | 'settings'
+type View = 'review' | 'preview' | 'settings' | 'trash'
 const LAST_MATTER_KEY = 'aliasai.lastMatterId'
 const LAST_DOCUMENT_KEY = 'aliasai.lastDocumentId'
 
@@ -51,6 +52,30 @@ export function App() {
     setRefreshKey((value) => value + 1)
   }
 
+  // Selection cleanup happens synchronously on trash success so no stale
+  // Document content renders for even one frame before the lists refresh.
+  const onMatterTrashed = (trashedMatterId: string) => {
+    if (trashedMatterId === matterId) {
+      setMatterId(null)
+      setDocumentId(null)
+      restoredDocumentIdRef.current = null
+      setSelectedMentionId(null)
+      localStorage.removeItem(LAST_MATTER_KEY)
+      localStorage.removeItem(LAST_DOCUMENT_KEY)
+    }
+    refresh()
+  }
+
+  const onDocumentTrashed = (trashedDocumentId: string) => {
+    if (trashedDocumentId === documentId) {
+      setDocumentId(null)
+      restoredDocumentIdRef.current = null
+      setSelectedMentionId(null)
+      localStorage.removeItem(LAST_DOCUMENT_KEY)
+    }
+    refresh()
+  }
+
   useEffect(() => {
     if (mattersLoaded && matterId !== null && !matters.some((matter) => matter.id === matterId)) {
       setMatterId(null)
@@ -89,6 +114,14 @@ export function App() {
         <div className="header-actions">
           <button
             type="button"
+            className={view === 'trash' ? 'selected' : undefined}
+            aria-pressed={view === 'trash'}
+            onClick={() => setView(view === 'trash' ? 'review' : 'trash')}
+          >
+            {t('trash.nav')}
+          </button>
+          <button
+            type="button"
             className={view === 'settings' ? 'selected' : undefined}
             aria-pressed={view === 'settings'}
             disabled={settingsBusy}
@@ -112,6 +145,7 @@ export function App() {
             selectedMatterId={matterId}
             onSelect={onSelectMatter}
             onCreated={refresh}
+            onTrashed={onMatterTrashed}
           />
           <DocumentList
             matterId={matterId}
@@ -119,11 +153,14 @@ export function App() {
             selectedDocumentId={documentId}
             onSelect={onSelectDocument}
             onChanged={refresh}
+            onTrashed={onDocumentTrashed}
           />
         </aside>
         <section className="content">
           {view === 'settings' ? (
             <ProviderSettingsPage onClose={() => setView('review')} onBusyChange={setSettingsBusy} />
+          ) : view === 'trash' ? (
+            <TrashView refreshKey={refreshKey} onChanged={refresh} />
           ) : (
             <>
               {(matterError ?? documentListError) !== null && (

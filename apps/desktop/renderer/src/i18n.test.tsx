@@ -8,10 +8,14 @@ function Harness() {
   return (
     <>
       <p>{t('matters.title')}</p>
+      <p>{t('trash.nav')}</p>
+      <p>{t('trash.matterConfirm')}</p>
       <p>{label('ID_CARD')}</p>
       <p>{label('SHARED_PROTECTED_VALUE')}</p>
       <p>{label('SAME_LABELED_FIELD_GROUP')}</p>
       <p>{formatError({ code: 'DOCUMENT_NOT_FOUND', message: 'Document was not found' })}</p>
+      <p>{formatError({ code: 'RESTORE_CONFLICT', message: 'An active Document with the same file hash already exists' })}</p>
+      <p>{formatError({ code: 'DOCUMENT_BUSY', message: 'Document has running work' })}</p>
       <button type="button" onClick={() => setLocale(locale === 'zh-CN' ? 'en' : 'zh-CN')}>
         {t('language.switch')}
       </button>
@@ -39,6 +43,12 @@ describe('renderer internationalization', () => {
     expect(screen.getByText('受保护值相同')).toBeDefined()
     expect(screen.getByText('同标签字段组')).toBeDefined()
     expect(screen.getByText('未找到该文档。')).toBeDefined()
+    expect(screen.getByText('回收站')).toBeDefined()
+    expect(screen.getByText('该事项的全部内容将从工作台消失，但可以在回收站中恢复。')).toBeDefined()
+    expect(
+      screen.getByText('该事项中已存在内容相同的活动文档；请保留它，或先将它移入回收站再恢复旧文档。')
+    ).toBeDefined()
+    expect(screen.getByText('文档正在处理或 AI 正在执行，请等待完成后再试。')).toBeDefined()
     expect(document.documentElement.lang).toBe('zh-CN')
   })
 
@@ -54,6 +64,11 @@ describe('renderer internationalization', () => {
     expect(screen.getByText('Matters')).toBeDefined()
     expect(screen.getByText('ID card number')).toBeDefined()
     expect(screen.getByText('Labeled field group')).toBeDefined()
+    expect(screen.getByText('Trash')).toBeDefined()
+    expect(
+      screen.getByText('All contents of this matter will disappear from the workspace. They stay recoverable in trash.')
+    ).toBeDefined()
+    expect(screen.getByText('An active Document with the same file hash already exists')).toBeDefined()
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe('en')
     expect(document.documentElement.lang).toBe('en')
 
