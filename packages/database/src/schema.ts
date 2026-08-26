@@ -65,7 +65,8 @@ export const documents = sqliteTable(
     parseStatus: text('parse_status').$type<DocumentParseStatus>().notNull(),
     createdAt: timestamp('created_at'),
     updatedAt: timestamp('updated_at'),
-    deletedAt: integer('deleted_at')
+    deletedAt: integer('deleted_at'),
+    supersedesDocumentId: text('supersedes_document_id').references((): AnySQLiteColumn => documents.id)
   },
   (table) => [
     // Trash is recoverable, so uniqueness applies to active Documents only: a
@@ -75,6 +76,7 @@ export const documents = sqliteTable(
       .where(sql`${table.deletedAt} IS NULL`),
     index('idx_documents_matter').on(table.matterId),
     index('idx_documents_matter_deleted').on(table.matterId, table.deletedAt),
+    index('idx_documents_supersedes').on(table.supersedesDocumentId),
     check('documents_page_count_positive', sql`${table.pageCount} IS NULL OR ${table.pageCount} >= 1`)
     // deleted_at ordering (null or >= created_at) is enforced by DB triggers in
     // the migrations, like the other trigger-only guarantees drizzle cannot express.
@@ -617,6 +619,7 @@ export const workspaceEvents = sqliteTable(
       .notNull()
       .references(() => matters.id),
     documentId: text('document_id').references(() => documents.id),
+    supersededDocumentId: text('superseded_document_id').references(() => documents.id),
     eventType: text('event_type').$type<WorkspaceEventType>().notNull(),
     actor: text('actor').$type<WorkspaceActor>().notNull(),
     createdAt: timestamp('created_at')
@@ -626,7 +629,7 @@ export const workspaceEvents = sqliteTable(
     index('idx_workspace_events_document_time').on(table.documentId, table.createdAt),
     check(
       'workspace_events_type_allowed',
-      sql`${table.eventType} IN ('MATTER_TRASHED', 'MATTER_RESTORED', 'DOCUMENT_TRASHED', 'DOCUMENT_RESTORED')`
+      sql`${table.eventType} IN ('MATTER_TRASHED', 'MATTER_RESTORED', 'DOCUMENT_TRASHED', 'DOCUMENT_RESTORED', 'DOCUMENT_REPLACED')`
     ),
     check('workspace_events_actor_allowed', sql`${table.actor} = 'USER'`),
     check(
@@ -635,8 +638,19 @@ export const workspaceEvents = sqliteTable(
         ${table.eventType} IN ('MATTER_TRASHED', 'MATTER_RESTORED')
         AND ${table.documentId} IS NULL
       ) OR (
-        ${table.eventType} IN ('DOCUMENT_TRASHED', 'DOCUMENT_RESTORED')
+        ${table.eventType} IN ('DOCUMENT_TRASHED', 'DOCUMENT_RESTORED', 'DOCUMENT_REPLACED')
         AND ${table.documentId} IS NOT NULL
+      )`
+    ),
+    check(
+      'workspace_events_superseded_consistent',
+      sql`(
+        ${table.eventType} = 'DOCUMENT_REPLACED'
+        AND ${table.supersededDocumentId} IS NOT NULL
+        AND ${table.supersededDocumentId} <> ${table.documentId}
+      ) OR (
+        ${table.eventType} <> 'DOCUMENT_REPLACED'
+        AND ${table.supersededDocumentId} IS NULL
       )`
     )
   ]

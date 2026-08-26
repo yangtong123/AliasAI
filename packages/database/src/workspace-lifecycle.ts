@@ -1,7 +1,8 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne } from 'drizzle-orm'
 import type { Document, Matter, WorkspaceEvent } from '@aliasai/domain'
-import { assertWorkspaceEvent } from '@aliasai/domain'
+import { assertDocument, assertWorkspaceEvent } from '@aliasai/domain'
 import type { AliasAiDatabase } from './client'
+import { matterIsAvailable } from './repositories'
 import { aiExecutions, documents, matters, processingJobs, sanitizedDocuments, workspaceEvents } from './schema'
 
 /** Raised when a workspace lifecycle mutation must fail closed. */
@@ -10,6 +11,7 @@ export class WorkspaceLifecycleRepositoryError extends Error {
     readonly code:
       | 'MATTER_NOT_FOUND'
       | 'DOCUMENT_NOT_FOUND'
+      | 'DOCUMENT_UNAVAILABLE'
       | 'MATTER_UNAVAILABLE'
       | 'MATTER_SCOPE_MISMATCH'
       | 'TIMESTAMP_INVALID'
@@ -31,6 +33,26 @@ export interface TrashMatterInput {
 
 export interface TrashDocumentInput {
   readonly documentId: string
+  readonly event: WorkspaceEvent
+}
+
+/** The replacement Document row created by a one-step replacement. */
+export interface ReplacementDocumentInput {
+  readonly id: string
+  readonly matterId: string
+  readonly originalNameCipher: Buffer
+  readonly sourcePathCipher?: Buffer
+  readonly fileHash: string
+  readonly mimeType: string
+  readonly parseStatus: 'IMPORTED'
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
+export interface ReplaceDocumentInput {
+  readonly supersededDocumentId: string
+  readonly replacement: ReplacementDocumentInput
+  /** DOCUMENT_REPLACED with documentId = replacement.id and supersededDocumentId set. */
   readonly event: WorkspaceEvent
 }
 
@@ -60,6 +82,7 @@ interface WorkspaceEventInsert {
   readonly id: string
   readonly matterId: string
   readonly documentId: string | null
+  readonly supersededDocumentId: string | null
   readonly eventType: WorkspaceEvent['type']
   readonly actor: WorkspaceEvent['actor']
   readonly createdAt: number
@@ -70,6 +93,7 @@ function toEventInsert(event: WorkspaceEvent): WorkspaceEventInsert {
     id: event.id,
     matterId: event.matterId,
     documentId: event.documentId ?? null,
+    supersededDocumentId: event.supersededDocumentId ?? null,
     eventType: event.type,
     actor: event.actor,
     createdAt: event.createdAt
@@ -253,6 +277,113 @@ export class WorkspaceLifecycleRepository {
         throw error
       }
       return { changed: true }
+    })
+  }
+
+  /**
+   * One-step replacement in a single transaction: trash the old active
+   * Document, insert the replacement as a new active Document recording
+   * supersedes_document_id, and append one DOCUMENT_REPLACED event linking
+   * both IDs. Nothing is copied from the old Document — no Pages, Blocks,
+   * Mentions, Entity assignments, jobs, sanitized artifacts, or AI executions —
+   * and any failure rolls the whole replacement back, leaving the old Document
+   * active. File inspection and hashing happen before this transaction.
+   */
+  replaceDocument(input: ReplaceDocumentInput): Document {
+    assertWorkspaceEvent(input.event)
+    if (
+      input.event.type !== 'DOCUMENT_REPLACED' ||
+      input.event.supersededDocumentId !== input.supersededDocumentId ||
+      input.event.documentId !== input.replacement.id
+    ) {
+      throw new WorkspaceLifecycleRepositoryError('MATTER_SCOPE_MISMATCH', 'Replacement event does not match its inputs')
+    }
+    return this.db.transaction((transaction) => {
+      const current = transaction
+        .select()
+        .from(documents)
+        .where(eq(documents.id, input.supersededDocumentId))
+        .get()
+      if (current === undefined) {
+        throw new WorkspaceLifecycleRepositoryError('DOCUMENT_NOT_FOUND', 'Document was not found')
+      }
+      if (current.matterId !== input.replacement.matterId || current.matterId !== input.event.matterId) {
+        throw new WorkspaceLifecycleRepositoryError('MATTER_SCOPE_MISMATCH', 'Replacement crossed a Matter boundary')
+      }
+      if (current.deletedAt !== null) {
+        throw new WorkspaceLifecycleRepositoryError('DOCUMENT_UNAVAILABLE', 'Only an active Document can be replaced')
+      }
+      if (!matterIsAvailable(transaction, current.matterId)) {
+        throw new WorkspaceLifecycleRepositoryError('MATTER_UNAVAILABLE', 'Matter is in the trash')
+      }
+      if (input.event.createdAt < current.updatedAt || input.replacement.createdAt < current.updatedAt) {
+        throw new WorkspaceLifecycleRepositoryError('TIMESTAMP_INVALID', 'Replacement timestamp must not move backwards')
+      }
+      this.assertDocumentIdle(transaction, input.supersededDocumentId)
+      // A different active Document with the replacement's hash would violate
+      // the partial unique index; failing here keeps the error explicit and
+      // rolls back before any state change.
+      const conflict = transaction
+        .select({ id: documents.id })
+        .from(documents)
+        .where(
+          and(
+            eq(documents.matterId, current.matterId),
+            eq(documents.fileHash, input.replacement.fileHash),
+            isNull(documents.deletedAt),
+            ne(documents.id, input.supersededDocumentId)
+          )
+        )
+        .limit(1)
+        .get()
+      if (conflict !== undefined) {
+        throw new WorkspaceLifecycleRepositoryError(
+          'RESTORE_CONFLICT',
+          'An active Document with the same file hash already exists in this Matter'
+        )
+      }
+
+      // Trash the old row first so replacing a Document with the identical
+      // file cannot trip the active-only partial unique index mid-transaction.
+      const trashed = transaction
+        .update(documents)
+        .set({ deletedAt: input.event.createdAt, updatedAt: input.event.createdAt })
+        .where(and(eq(documents.id, input.supersededDocumentId), isNull(documents.deletedAt)))
+        .run()
+      if (trashed.changes !== 1) {
+        throw new WorkspaceLifecycleRepositoryError('DOCUMENT_BUSY', 'Document state changed before replacement completed')
+      }
+      const replacement: Document = {
+        id: input.replacement.id,
+        matterId: input.replacement.matterId,
+        fileHash: input.replacement.fileHash,
+        mimeType: input.replacement.mimeType,
+        parseStatus: input.replacement.parseStatus,
+        createdAt: input.replacement.createdAt,
+        updatedAt: input.replacement.updatedAt,
+        supersedesDocumentId: input.supersededDocumentId
+      }
+      assertDocument(replacement)
+      try {
+        transaction
+          .insert(documents)
+          .values({
+            ...input.replacement,
+            supersedesDocumentId: input.supersededDocumentId
+          })
+          .run()
+        transaction.insert(workspaceEvents).values(toEventInsert(input.event)).run()
+      } catch (error) {
+        if (isUniqueIndexViolation(error)) {
+          throw new WorkspaceLifecycleRepositoryError(
+            'RESTORE_CONFLICT',
+            'An active Document with the same file hash already exists in this Matter',
+            { cause: error }
+          )
+        }
+        throw error
+      }
+      return replacement
     })
   }
 

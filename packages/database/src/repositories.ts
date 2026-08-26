@@ -744,7 +744,7 @@ type ProtectedValueRow = typeof protectedValues.$inferSelect
 type TransactionLike = Parameters<Parameters<AliasAiDatabase['transaction']>[0]>[0]
 
 /** True when the Matter exists and is not in the trash. */
-function matterIsAvailable(db: AliasAiDatabase | TransactionLike, matterId: string): boolean {
+export function matterIsAvailable(db: AliasAiDatabase | TransactionLike, matterId: string): boolean {
   const row = db.select({ status: matters.status }).from(matters).where(eq(matters.id, matterId)).get()
   return row !== undefined && row.status !== 'DELETED'
 }
@@ -760,7 +760,8 @@ function toDocument(row: DocumentRow): Document {
     parseStatus: row.parseStatus,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    ...(row.deletedAt === null ? {} : { deletedAt: row.deletedAt })
+    ...(row.deletedAt === null ? {} : { deletedAt: row.deletedAt }),
+    ...(row.supersedesDocumentId === null ? {} : { supersedesDocumentId: row.supersedesDocumentId })
   }
 }
 

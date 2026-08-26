@@ -42,6 +42,8 @@ export interface DocumentSummaryDTO {
   readonly pageCount: number | undefined
   readonly createdAt: number
   readonly updatedAt: number
+  /** Version lineage: the Document this one replaced, when created by replacement. */
+  readonly supersedesDocumentId?: string
 }
 
 export interface EntitySummaryDTO {
@@ -292,7 +294,10 @@ export class ReviewQueryService {
       parseStatus: item.document.parseStatus,
       pageCount: item.document.pageCount ?? 0,
       createdAt: item.document.createdAt,
-      updatedAt: item.document.updatedAt
+      updatedAt: item.document.updatedAt,
+      ...(item.document.supersedesDocumentId === undefined
+        ? {}
+        : { supersedesDocumentId: item.document.supersedesDocumentId })
     }
   }
 

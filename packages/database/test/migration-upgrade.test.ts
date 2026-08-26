@@ -82,7 +82,7 @@ describe('database migration upgrades', () => {
       ).toEqual({ name: 'ai_executions' })
       expect(
         upgraded.sqlite.prepare('SELECT count(*) AS count FROM __drizzle_migrations').get()
-      ).toEqual({ count: 7 })
+      ).toEqual({ count: 8 })
       expect(
         (upgraded.sqlite.prepare("PRAGMA table_info('sanitization_mappings')").all() as Array<{ name: string; notnull: number }>)
           .find((column) => column.name === 'entity_id')
@@ -197,6 +197,136 @@ describe('database migration upgrades', () => {
       expect(() =>
         upgraded.sqlite.prepare("DELETE FROM workspace_events WHERE id = 'event-1'").run()
       ).toThrowError(/append-only/)
+    } finally {
+      upgraded.sqlite.close()
+    }
+  })
+
+  it('upgrades to replacement lineage without losing audit history', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'aliasai-migration-lineage-'))
+    temporaryDirectories.push(directory)
+    const oldMigrations = join(directory, 'migrations')
+    const oldMeta = join(oldMigrations, 'meta')
+    const databasePath = join(directory, 'aliasai.sqlite')
+    await mkdir(oldMeta, { recursive: true })
+
+    for (const migration of [
+      '0000_supreme_quasar.sql',
+      '0001_slippery_the_liberteens.sql',
+      '0002_breezy_sauron.sql',
+      '0003_condemned_shard.sql',
+      '0004_fancy_timeslip.sql',
+      '0005_smiling_diamondback.sql',
+      '0006_robust_drax.sql'
+    ]) {
+      await copyFile(join(migrationsDirectory, migration), join(oldMigrations, migration))
+    }
+
+    const journal = JSON.parse(
+      await readFile(join(migrationsDirectory, 'meta/_journal.json'), 'utf8')
+    ) as { entries: Array<{ idx: number }> }
+    await writeFile(
+      join(oldMeta, '_journal.json'),
+      `${JSON.stringify({ ...journal, entries: journal.entries.filter((entry) => entry.idx <= 6) }, null, 2)}\n`
+    )
+
+    const legacy = openDatabase(databasePath)
+    migrateDatabase(legacy.db, oldMigrations)
+    legacy.sqlite
+      .prepare('INSERT INTO matters (id, name_cipher, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run('matter-lineage', Buffer.from('encrypted-name'), 'ACTIVE', 1, 1)
+    legacy.sqlite
+      .prepare(
+        `INSERT INTO documents (
+           id, matter_id, original_name_cipher, file_hash, mime_type, parse_status, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run('document-old', 'matter-lineage', Buffer.from('x'), 'hash-old', 'application/pdf', 'IMPORTED', 10, 10)
+    legacy.sqlite
+      .prepare(
+        `INSERT INTO workspace_events (id, matter_id, event_type, actor, created_at)
+         VALUES ('event-legacy', 'matter-lineage', 'MATTER_TRASHED', 'USER', 10)`
+      )
+      .run()
+    legacy.sqlite
+      .prepare(
+        `INSERT INTO workspace_events (id, matter_id, document_id, event_type, actor, created_at)
+         VALUES ('event-legacy-doc', 'matter-lineage', 'document-old', 'DOCUMENT_TRASHED', 'USER', 11)`
+      )
+      .run()
+    legacy.sqlite.close()
+
+    const upgraded = openDatabase(databasePath)
+    try {
+      migrateDatabase(upgraded.db)
+
+      // Existing Documents upgrade without lineage; legacy audit rows survive.
+      expect(
+        (upgraded.sqlite.prepare("SELECT supersedes_document_id FROM documents WHERE id = 'document-old'").get() as { supersedes_document_id: string | null }).supersedes_document_id
+      ).toBeNull()
+      expect(upgraded.sqlite.prepare('SELECT count(*) AS count FROM workspace_events').get()).toEqual({ count: 2 })
+
+      // DOCUMENT_REPLACED requires both lineage IDs; other events reject the column.
+      expect(() =>
+        upgraded.sqlite
+          .prepare(
+            `INSERT INTO workspace_events (id, matter_id, document_id, event_type, actor, created_at)
+             VALUES ('event-bad', 'matter-lineage', 'document-old', 'DOCUMENT_REPLACED', 'USER', 12)`
+          )
+          .run()
+      ).toThrowError(/CHECK/)
+      expect(() =>
+        upgraded.sqlite
+          .prepare(
+            `INSERT INTO workspace_events (id, matter_id, document_id, superseded_document_id, event_type, actor, created_at)
+             VALUES ('event-bad-2', 'matter-lineage', 'document-old', 'document-old', 'DOCUMENT_TRASHED', 'USER', 12)`
+          )
+          .run()
+      ).toThrowError(/CHECK/)
+      upgraded.sqlite
+        .prepare(
+          `INSERT INTO documents (
+             id, matter_id, original_name_cipher, file_hash, mime_type, parse_status, created_at, updated_at, supersedes_document_id
+           ) VALUES ('document-new', 'matter-lineage', ?, 'hash-new', 'application/pdf', 'IMPORTED', 12, 12, 'document-old')`
+        )
+        .run(Buffer.from('y'))
+      upgraded.sqlite
+        .prepare(
+          `INSERT INTO workspace_events (id, matter_id, document_id, superseded_document_id, event_type, actor, created_at)
+           VALUES ('event-replaced', 'matter-lineage', 'document-new', 'document-old', 'DOCUMENT_REPLACED', 'USER', 12)`
+        )
+        .run()
+
+      // Lineage constraints: no self-reference, no cross-Matter lineage, immutable.
+      expect(() =>
+        upgraded.sqlite
+          .prepare(
+            `INSERT INTO documents (id, matter_id, original_name_cipher, file_hash, mime_type, parse_status, created_at, updated_at, supersedes_document_id)
+             VALUES ('document-self', 'matter-lineage', ?, 'hash-self', 'application/pdf', 'IMPORTED', 13, 13, 'document-self')`
+          )
+          .run(Buffer.from('z'))
+      // The scope guard subsumes self-reference on INSERT (the row does not
+      // exist yet), so either lineage guard firing is acceptable.
+      ).toThrowError(/cannot reference itself|one Matter/)
+      expect(() =>
+        upgraded.sqlite
+          .prepare(
+            `INSERT INTO documents (id, matter_id, original_name_cipher, file_hash, mime_type, parse_status, created_at, updated_at, supersedes_document_id)
+             VALUES ('document-cross', 'matter-lineage', ?, 'hash-cross', 'application/pdf', 'IMPORTED', 13, 13, 'document-other-matter')`
+          )
+          .run(Buffer.from('z'))
+      ).toThrowError(/one Matter/)
+      expect(() =>
+        upgraded.sqlite
+          .prepare("UPDATE documents SET supersedes_document_id = NULL WHERE id = 'document-new'")
+          .run()
+      ).toThrowError(/immutable/)
+
+      // The rebuilt table keeps its append-only guarantees.
+      expect(() =>
+        upgraded.sqlite.prepare("UPDATE workspace_events SET event_type = 'MATTER_RESTORED' WHERE id = 'event-replaced'").run()
+      ).toThrowError(/append-only/)
+      expect(() => upgraded.sqlite.prepare('DELETE FROM workspace_events').run()).toThrowError(/append-only/)
     } finally {
       upgraded.sqlite.close()
     }

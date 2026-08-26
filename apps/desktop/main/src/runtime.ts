@@ -6,6 +6,7 @@ import {
   AiExecutionService,
   DocumentImportService,
   DocumentProcessingService,
+  DocumentReplacementService,
   EntityResolutionService,
   EntityService,
   MatterService,
@@ -62,6 +63,8 @@ export interface AliasAiServices {
   readonly aiProvider: AiProviderManager
   /** Recoverable trash/restore for Matters and Documents. */
   readonly lifecycle: WorkspaceLifecycleService
+  /** One-step Document replacement with explicit version lineage. */
+  readonly replacement: DocumentReplacementService
 }
 
 export interface AliasAiRuntime {
@@ -144,6 +147,12 @@ export async function initializeRuntime(app: AppLike, safeStorage: SafeStorage):
     ai: new AiExecutionService(new AiExecutionRepository(db), rehydration, aiProvider, keys),
     aiProvider,
     lifecycle: new WorkspaceLifecycleService(
+      new WorkspaceLifecycleRepository(db),
+      documents,
+      matterRepository,
+      keys
+    ),
+    replacement: new DocumentReplacementService(
       new WorkspaceLifecycleRepository(db),
       documents,
       matterRepository,

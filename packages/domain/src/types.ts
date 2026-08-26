@@ -41,6 +41,12 @@ export interface Document {
    * active Document; set to the trash time for a trashed one.
    */
   readonly deletedAt?: number
+  /**
+   * Version lineage: the active Document this one replaced in a one-step
+   * replacement. Undefined for a fresh import; never equal to the Document's
+   * own id and always within the same Matter.
+   */
+  readonly supersedesDocumentId?: string
 }
 
 export type PageSourceType = 'NATIVE' | 'RASTER' | 'MIXED'
@@ -307,6 +313,7 @@ export type WorkspaceEventType =
   | 'MATTER_RESTORED'
   | 'DOCUMENT_TRASHED'
   | 'DOCUMENT_RESTORED'
+  | 'DOCUMENT_REPLACED'
 
 /** Workspace lifecycle events are always user-authored in V1. */
 export type WorkspaceActor = 'USER'
@@ -318,6 +325,11 @@ export interface WorkspaceEvent {
   readonly type: WorkspaceEventType
   readonly actor: WorkspaceActor
   readonly createdAt: number
+  /**
+   * Only for DOCUMENT_REPLACED: the Document the event's documentId replaced.
+   * Links both version-lineage IDs in one append-only row.
+   */
+  readonly supersededDocumentId?: string
 }
 
 export type ProcessingJobType = 'PARSE' | 'OCR' | 'DETECT' | 'RESOLVE' | 'SANITIZE' | 'VERIFY'

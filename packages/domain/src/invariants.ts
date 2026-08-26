@@ -83,6 +83,12 @@ export function assertDocument(document: Document): void {
       throw new DomainInvariantError('document.deletedAt must not precede document.createdAt')
     }
   }
+  if (document.supersedesDocumentId !== undefined) {
+    requireIdentifier(document.supersedesDocumentId, 'document.supersedesDocumentId')
+    if (document.supersedesDocumentId === document.id) {
+      throw new DomainInvariantError('document.supersedesDocumentId cannot reference itself')
+    }
+  }
 }
 
 export function assertDocumentPage(page: DocumentPage): void {
@@ -300,7 +306,7 @@ export function assertEntityRelationship(relationship: EntityRelationship): void
 }
 
 const MATTER_WORKSPACE_EVENT_TYPES = new Set(['MATTER_TRASHED', 'MATTER_RESTORED'])
-const DOCUMENT_WORKSPACE_EVENT_TYPES = new Set(['DOCUMENT_TRASHED', 'DOCUMENT_RESTORED'])
+const DOCUMENT_WORKSPACE_EVENT_TYPES = new Set(['DOCUMENT_TRASHED', 'DOCUMENT_RESTORED', 'DOCUMENT_REPLACED'])
 
 /** Verifies the container lifecycle event shape: target type and IDs must agree. */
 export function assertWorkspaceEvent(event: WorkspaceEvent): void {
@@ -309,6 +315,20 @@ export function assertWorkspaceEvent(event: WorkspaceEvent): void {
   requireNonNegativeInteger(event.createdAt, 'workspaceEvent.createdAt')
   if (event.actor !== 'USER') {
     throw new DomainInvariantError('workspace events are always user-authored in V1')
+  }
+  if (event.type === 'DOCUMENT_REPLACED') {
+    if (event.documentId === undefined || event.supersededDocumentId === undefined) {
+      throw new DomainInvariantError('replacement workspace events link the new and superseded Document')
+    }
+    requireIdentifier(event.documentId, 'workspaceEvent.documentId')
+    requireIdentifier(event.supersededDocumentId, 'workspaceEvent.supersededDocumentId')
+    if (event.supersededDocumentId === event.documentId) {
+      throw new DomainInvariantError('a Document cannot replace itself')
+    }
+    return
+  }
+  if (event.supersededDocumentId !== undefined) {
+    throw new DomainInvariantError('only replacement workspace events carry a superseded Document')
   }
   if (MATTER_WORKSPACE_EVENT_TYPES.has(event.type)) {
     if (event.documentId !== undefined) {

@@ -115,7 +115,8 @@ export class ReviewQueryRepository {
         ...(row.parserType === null ? {} : { parserType: row.parserType }),
         parseStatus: row.parseStatus,
         createdAt: row.createdAt,
-        updatedAt: row.updatedAt
+        updatedAt: row.updatedAt,
+        ...(row.supersedesDocumentId === null ? {} : { supersedesDocumentId: row.supersedesDocumentId })
       },
       originalNameCipher: row.originalNameCipher
     }))
