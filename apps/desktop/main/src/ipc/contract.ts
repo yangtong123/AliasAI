@@ -32,6 +32,10 @@ export type AiProviderSaveRequest =
  * The renderer <-> main IPC contract. One entry per channel: `request` is what
  * the renderer sends, `response` the data payload it gets back on success.
  * Errors travel as IpcResult error envelopes, never as thrown rejections.
+ *
+ * `document:process`, `document:detect`, and `document:resolve` are retained
+ * this milestone as diagnostic/compatibility stage channels only; no
+ * production renderer component calls them.
  */
 export interface AliasAiInvokeMap {
   'matter:list': { request: Record<string, never>; response: readonly MatterSummaryDTO[] }
@@ -44,6 +48,16 @@ export interface AliasAiInvokeMap {
   'document:get': {
     request: { documentId: string }
     response: { document: DocumentSummaryDTO; jobs: readonly JobSummaryDTO[] }
+  }
+  /**
+   * Schedules (or retries) automatic analysis for one Document and returns
+   * immediately — the sequential parse/detect/resolve pipeline runs in the
+   * background process-local runner. `accepted` is false when that Document
+   * already has an active run in this app process; it is not an error.
+   */
+  'document:analyze': {
+    request: { documentId: string }
+    response: { accepted: boolean }
   }
   'document:process': {
     request: { documentId: string }
@@ -146,6 +160,7 @@ export const ALIASAI_CHANNELS: readonly AliasAiChannel[] = [
   'document:pickAndImport',
   'document:list',
   'document:get',
+  'document:analyze',
   'document:process',
   'document:detect',
   'document:resolve',

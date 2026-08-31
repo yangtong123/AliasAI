@@ -47,12 +47,103 @@ V1 intentionally keeps privacy core and AI network access inside the same Electr
 ## Review and AI UI V1 (Steps 9–10)
 
 The desktop review workflow is the first operable local loop: create a Matter,
-import a PDF, run parse → detect → resolve, review mentions, generate the
-sanitized preview, send that persisted artifact to the configured AI provider
-(the offline Mock, or the OpenAI-compatible network provider), and compare the
-sanitized response with its locally rehydrated result.
+import a PDF, and AliasAI automatically reads it, detects sensitive
+information, and resolves identities (parse → detect → resolve runs in the
+background without manual stage buttons), then shows the result-first review,
+the sanitized preview, the configured AI provider output (the offline Mock, or
+the OpenAI-compatible network provider), and the locally rehydrated result.
+
+### Automatic analysis orchestration
+
+- **Sequential service** (`packages/application/src/document-analysis.ts`):
+  composes the existing processing, detection, and resolution services into
+  one operation and owns no transactions itself. After every awaited stage it
+  re-reads persisted status, then picks the next stage via the pure
+  `selectAnalysisAction` rule (`packages/domain/src/analysis-stage.ts`). The
+  same rule drives the main-process retry routing and the renderer's failure
+  copy, so a failed stage is never attributed differently on either side. A
+  stage failure propagates unchanged and ends the run; READY/SANITIZED are
+  successful no-ops; live RUNNING states never start a second run; a
+  sanitization-owned failure stays outside analysis (Preview owns that retry).
+  When a diagnostic compatibility channel already owns a live stage, the
+  automatic runner keeps its reservation and waits for the next persisted
+  resting state; it then continues downstream without rerunning that stage.
+  An externally owned stage that ends FAILED remains an explicit user retry.
+  The bounded-loop guard performs one authoritative final read: a terminal
+  state reached on the last iteration wins, while a genuinely stalled state
+  receives an exact `ANALYSIS_STALLED` failure revision instead of leaving the
+  renderer's activity window open.
+- **Failure terminal state**: a stage failure that escapes BEFORE its own
+  FAILED bookkeeping (source validation, availability guards) is finalized by
+  `DocumentAnalysisService` through `EncryptedAnalysisFailureSink` +
+  `AnalysisFailureRepository`: the fallback carries the exact pre-stage
+  Document revision, so a stage that already finalized its own failure cannot
+  be recorded twice. A retry that fails before taking ownership advances to a
+  strictly newer revision even inside the same millisecond. If a stage acquired
+  ownership but its own finalizing transaction failed, the fallback may close
+  only that exact running Job owner. Trashed and sanitization-owned rows are
+  never touched by the sink. If the fallback write itself fails, the service
+  raises `ANALYSIS_FAILURE_UNRECORDED`; the runner retains that code-only,
+  process-local terminal signal until retry or lifecycle removal, and
+  `document:get` exposes it so the renderer stops polling and enables retry.
+  The service retains only the code, stage, expected revision, and owner Job ID
+  needed to retry that terminal write; the next explicit analysis attempt
+  finalizes it before rerunning the failed stage. Successful compatibility
+  work, trash, and replacement clear this process-local state.
+- **Background runner** (`apps/desktop/main/src/document-analysis-runner.ts`):
+  process-local `Map<DocumentId, Promise>` duplicate-start guard; `analyze()`
+  defers into a fresh macrotask so import/replace IPC responses are never
+  blocked behind synchronous resolution work. Import and
+  replacement return their summary immediately; `start()` registers one
+  background run, later starts for the same Document coalesce onto it, every
+  rejection is observed (persisted FAILED state remains the user-facing
+  truth), map entries clear in `finally`, `drain()` supports graceful
+  shutdown before resources close (`before-quit` in `apps/desktop/main/src/index.ts`),
+  and `close()` refuses late starts. Graceful shutdown first aborts active AI
+  requests and stops the persistent Python worker, then drains runner and IPC
+  promises up to a fixed five-second deadline before SQLite closes, so a stuck
+  native dialog or adapter cannot block exit forever. Abrupt exits stay safe: SQLite rolls
+  back uncommitted stage transactions and startup recovery finalizes leftover
+  RUNNING states.
+- **IPC**: `document:analyze` schedules or retries analysis without waiting;
+  unavailable Documents fail closed with the coded DOCUMENT_NOT_FOUND error.
+  Import/replace handlers schedule automatically after persistence succeeds.
+  `document:process|detect|resolve` remain this milestone as
+  diagnostic/compatibility channels only — no production renderer component
+  calls them. Selecting a resumable (`IMPORTED/PARSED/DETECTED`) Document
+  resumes automatic analysis once per app session; a persisted FAILED state
+  waits for the single explicit retry action instead of looping.
 
 Layering and boundary rules:
+
+- **Result-first renderer shell** (`AnalysisStatus`, `DocumentList`,
+  `DocumentReviewPage`): while work runs, one product-level status panel with
+  friendly copy replaces stage controls; the new import/replacement is
+  selected automatically so progress and result appear without clicks; status
+  status polling is a per-document loop that reschedules after every
+  completion (transient read failures retry instead of stranding stale data),
+  tags results with the requested id so switching Documents can never paint
+  the previous document's decrypted content for even one frame, and bridges
+  scheduling/stage hand-offs via the activity window scoped to the selected
+  Document only. A failed schedule releases that window and re-enables its
+  retry button. The review page leads
+  with a mutually-exclusive outcome summary and plain-language per-item
+  results (属于/需要确认/不是敏感信息). Detector diagnostics stay behind 技术详情,
+  expert identity tools (create/assign, rename, merge/split, constraints,
+  token list) behind 高级身份管理, and missed detections behind one collapsed
+  补充标记 entry — every existing audited correction operation stays reachable.
+  Each document row keeps a compact ⋯ control whose expanded actions render
+  IN FLOW as an ARIA `menu` directly beneath their row — they reserve
+  layout height instead of floating over sibling documents or the import
+  button. The trigger declares `aria-haspopup="menu"`; actions use
+  `menuitem`. Opening focuses the first action, ArrowUp/Down/Home/End rove
+  across items, Tab follows native order,
+  Escape/outside click closes with focus returned to the trigger, and
+  selecting another document or switching matters collapses it. Import/replacement returns the workspace
+  to the review view automatically. Sanitization-owned failures keep their
+  recovery surface: the preview tab stays reachable with a regenerate action,
+  and matter-level identity management (rename/merge/constraints/token list)
+  has its own disclosure independent of the selected mention.
 
 - **Application read model** (`packages/application/src/review-read.ts`,
   `review-operations.ts`, `sanitized-preview.ts`): DTOs carry decrypted display
@@ -82,7 +173,8 @@ Layering and boundary rules:
   by a channel allowlist that a drift test keeps in sync with the registered
   handlers. Preload keeps zero workspace imports.
 - **Renderer**: type-only imports from `@aliasai/application` (erased at
-  build); polls document status while a pipeline stage is in flight; review
+  build); polls document status while a pipeline stage is in flight and across
+  the background-analysis scheduling window (scoped to the selected Document); review
   mutations are disabled once a document is SANITIZED because the artifact is
   one-shot — and the repository enforces the same rule inside the mutation
   transaction (assign/reassign/confirm/create-and-assign all reject mentions
@@ -175,7 +267,9 @@ Document sets `documents.deleted_at`. Both restore symmetrically.
   unchanged, so a restored (or still-trashed) artifact keeps rehydrating
   locally. Permanent deletion and retention are deliberately out of scope.
 - **One-step replacement**: `DocumentReplacementService` inspects and hashes
-  the chosen file before any database work, then
+  the chosen file before any database work. After that final await, a synchronous
+  pre-commit guard rejects an analysis reservation that arrived during source
+  inspection; execution then enters
   `WorkspaceLifecycleRepository.replaceDocument` performs the whole
   replacement in one transaction — running-work and hash-collision checks,
   trash the old row, insert the new active Document with

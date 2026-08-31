@@ -233,11 +233,73 @@ button.danger {
   color: #ffb8c0;
 }
 
-.pipeline .stages {
+.analysis-status {
+  max-width: 720px;
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  border: 1px solid #263650;
+  border-radius: 8px;
+}
+
+.analysis-status .analysis-headline {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+.analysis-status.failed {
+  border-color: #8d4b55;
+}
+
+.analysis-status.complete {
+  border-color: #3f8f6b;
+}
+
+.analysis-status progress {
+  width: 100%;
+  max-width: 420px;
+  accent-color: #6ea8ff;
+}
+
+.result-summary {
+  max-width: 720px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border: 1px solid #3f8f6b;
+  border-radius: 8px;
+}
+
+.result-summary h3 {
+  margin-top: 0;
+  color: #7fd6a8;
+}
+
+.result-summary p {
+  margin: 4px 0;
+}
+
+.result-attention-count {
+  color: #ffcc7a;
+  font-weight: 600;
+}
+
+.missed-entry {
   display: flex;
-  gap: 16px;
+  align-items: center;
+  gap: 8px;
   color: #8ba6c9;
-  padding: 0;
+}
+
+.tech-details,
+.advanced-editor {
+  margin-top: 12px;
+  border-top: 1px dashed #33455f;
+  padding-top: 8px;
+}
+
+.tech-details summary,
+.advanced-editor summary {
+  cursor: pointer;
+  color: #8ba6c9;
 }
 
 .preview textarea {
@@ -324,13 +386,77 @@ button.danger {
   gap: 8px;
 }
 
-.item-row > button:first-child {
-  flex: 1;
-  text-align: left;
+.document-list li {
+  position: relative;
 }
 
-.trash-button {
+/* The filename cell may shrink to nothing (ellipsis) but the action cell
+   never does, so the compact ⋯ menu can never be pushed out of the row. */
+.doc-select {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+  overflow: hidden;
+}
+
+.document-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item-actions,
+.doc-menu-anchor {
   flex-shrink: 0;
+  display: inline-flex;
+}
+
+/* The expanded action group is a BLOCK sibling of .item-row: it occupies its
+   own full-width layout band below the row — never beside it, never over
+   another document, never squeezing the filename cell. */
+
+.overflow-button {
+  padding: 2px 10px;
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+/* Expanded IN FLOW below its own row: it reserves layout height instead of
+   floating over sibling documents, so no action surface ever covers another
+   document's filename/status (or the import button). */
+.doc-menu {
+  /* content-box would add 2*padding + 2*border on top of 100% and overflow
+     the sidebar by 10px; border-box keeps the group exactly row-wide. */
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: #16202f;
+  border: 1px solid #33455f;
+  border-radius: 8px;
+}
+
+.document-list li + li {
+  margin-top: 4px;
+}
+
+.doc-menu button {
+  border: none;
+  background: transparent;
+  justify-content: flex-start;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.doc-menu button:hover:not(:disabled) {
+  background: #27395a;
 }
 
 .trash-confirm {
@@ -372,4 +498,20 @@ button.danger {
 .badge.lineage {
   border-color: #3f8f6b;
   color: #7fd6a8;
+}
+
+/* Review panes must never paint over one another: every grid child can
+   shrink, and below 1024 CSS px the result panel stacks under the document. */
+.review-layout > * {
+  min-width: 0;
+}
+
+@media (max-width: 1024px) {
+  .layout {
+    grid-template-columns: 240px 1fr;
+  }
+
+  .review-layout {
+    grid-template-columns: 1fr;
+  }
 }

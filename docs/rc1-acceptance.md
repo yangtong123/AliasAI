@@ -23,33 +23,44 @@ Use synthetic or disposable documents only during RC testing.
 1. Create a Matter and select it.
 2. Import a native-text PDF. Importing the same unchanged PDF again in the
    same Matter must reuse the existing Document rather than duplicate it.
-3. Run Parse, Detect, and Resolve. A scanned/raster-only PDF is expected to
-   fail closed in this package because the large OCR runtime is not bundled.
-4. Inspect the automatically created Entities and assignments. Correct only
-   exceptions using rename, reassign, reject, manual Mention, merge, or split;
-   then optionally Confirm reviewed assignments.
-5. Open Sanitized preview. Unsupported or tokenless Mentions must be listed as
+   The new Document is selected immediately and analyzed automatically —
+   read it, detect sensitive information, resolve identities — with visible
+   friendly progress (正在读取文档… → 正在识别敏感信息… → 正在整理人物和机构关系…)
+   and no manual stage buttons anywhere. A scanned/raster-only PDF is expected
+   to fail closed in this package because the large OCR runtime is not
+   bundled.
+3. Inspect the result: the review page opens with a plain-language summary
+   (发现 N 处敏感信息，X 处已处理，Y 处需要确认) and items needing confirmation are
+   highlighted first. Correct only exceptions using 修改结果 / 确认归属,
+   不是敏感信息, or the collapsed 补充标记 entry for missed detections;
+   optionally Confirm reviewed assignments. Expert identity tools stay
+   available but folded away under 技术详情 and 高级身份管理.
+4. Open 脱敏预览 Sanitized preview. Unsupported or tokenless Mentions must be listed as
    blockers. An identifier with no reliable Entity owner must still sanitize via
    a value-level alias/token without creating an Entity. With no blockers, generate the
    preview and verify real protected values are absent.
-6. Run the AI analysis (Mock by default). The sanitized response must retain
+5. Run the AI analysis (Mock by default). The sanitized response must retain
    aliases/tokens but contain no protected plaintext. Enable the local
    RESTORE_ON_REQUEST option and verify the restored response only appears
    locally. While an execution is in flight, a Cancel button must stop it; the
    execution then shows as failed/cancelled without a partial result.
-7. (Optional, requires an endpoint) Open 设置 Settings, switch the provider to
+6. (Optional, requires an endpoint) Open 设置 Settings, switch the provider to
    OpenAI-compatible, enter the Base URL (must be HTTPS; loopback HTTP is
    allowed for local model servers), model name, and API key, then use
    测试连接 Test connection before saving. The key is stored encrypted by the
    macOS keychain; the page only ever shows 已配置 (configured), never the key
    itself. Saving returns to the Mock provider at any time, and 删除提供商配置
    removes every stored provider settings including the key.
-8. Copy or export the sanitized Document and AI response. Copy/export of the
+7. Copy or export the sanitized Document and AI response. Copy/export of the
    restored response is intentionally allowed only after an explicit click;
    the warning means that sensitive plaintext is leaving AliasAI's encrypted
    store for the clipboard or selected text file.
-9. Trash and restore. On the Matter and Document lists, each item has a
-   移入回收站 (move to trash) button with a confirmation step: a Matter warns
+8. Document list actions live behind one compact ⋯ button per row that never
+   covers the filename or status. Opening it shows 用新 PDF 替换… and 移入回收站;
+   Escape, an outside click, or picking another Document closes it and focus
+   returns to the ⋯ button. Destructive choices still confirm below the row.
+9. Trash and restore. On the Matter and Document lists, each item can be
+   moved to trash via the ⋯ menu with a confirmation step: a Matter warns
    that all of its contents will disappear from the workspace, a Document
    warns that it stays recoverable. After trashing, the item disappears from
    the normal lists immediately; if it was selected, the selection is cleared.
@@ -60,20 +71,22 @@ Use synthetic or disposable documents only during RC testing.
    trashed Document must create a new Document with a new identity; the old
    copy remains in trash and its sanitized artifact can still rehydrate
    locally after restore. Restoring while an active copy with the same content
-   exists must show an actionable conflict message. Trashing an item with a
-   running pipeline stage or AI execution is rejected with a busy message.
-10. Replace in one step. On the Document list, 用新 PDF 替换… (Replace with new
+   exists must show an actionable conflict message. Trashing an item with
+   running analysis work or AI execution is rejected with a busy message.
+10. Replace in one step. In the ⋯ menu, 用新 PDF 替换… (Replace with new
    PDF…) opens a confirmation explaining that the current Document moves to
    trash and nothing it produced (mentions, review decisions, sanitized
    results) is copied. Choosing the new PDF must leave the old Document in
-   回收站 (Trash), create an active replacement with a new identity and a
-   "Replaces an older document" marker, and record one audited replacement
-   event. The old Document's sanitized artifact must still rehydrate locally
-   from Trash. Replacing while a pipeline stage or AI execution is running is
-   rejected with a busy message, and a cancelled picker changes nothing.
+   回收站 (Trash), select the replacement immediately (it is then analyzed
+   automatically like a fresh import), show a "Replaces an older document"
+   marker, and record one audited replacement event. The old Document's
+   sanitized artifact must still rehydrate locally from Trash. Replacing while
+   analysis or AI execution is running is rejected with a busy message, and a
+   cancelled picker changes nothing.
 11. Quit and reopen. The last valid Matter and Document selection should be
-   restored; persisted results and the configured AI provider (including the
-   stored key) remain available.
+   restored; reopening a resumable Document (interrupted import/analysis)
+   continues its automatic analysis once, and persisted results plus the
+   configured AI provider (including the stored key) remain available.
 
 The desktop UI defaults to Simplified Chinese. Use the language selector in
 the upper-right corner to switch between 简体中文 and English; the choice must
@@ -82,11 +95,15 @@ then completes the entire acceptance workflow through the Chinese interface.
 
 ## Failure and restart checks
 
-- A failed Parse, Detect, or Resolve stage shows the matching Retry action.
-- A SANITIZE failure is retried from Sanitized preview, not by rerunning Parse.
+- A failed parse/detect/resolve stage shows 分析未完成，请重试 with exactly one
+  重新分析 action; pressing it resumes from the failed stage using persisted
+  job evidence.
+- A SANITIZE failure keeps 脱敏预览 reachable: open that tab and press
+  重新生成脱敏预览 — it does not rerun the analysis stages.
 - Force-quitting during a job must not leave a permanently running state. On
   next launch, startup recovery marks it FAILED with the code `INTERRUPTED`;
-  retry from the displayed stage. Completed encrypted data is retained.
+  press 重新分析 on the Document (or reopen it if analysis had not yet
+  failed). Completed encrypted data is retained.
 - A changed source file is rejected before parse commit. Re-import the changed
   file to create a new Document identity.
 - Trashing or replacing a Document while a pipeline stage or AI execution is

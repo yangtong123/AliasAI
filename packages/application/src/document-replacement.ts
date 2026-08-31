@@ -7,6 +7,7 @@ import {
   type WorkspaceLifecycleRepository
 } from '@aliasai/database'
 import { inspectDocumentSource } from '@aliasai/document'
+import { WorkspaceLifecycleError } from './workspace-lifecycle'
 import type { ApplicationKeys } from './index'
 import { documentOriginalNameContext, documentSourcePathContext } from './index'
 
@@ -37,6 +38,14 @@ export type DocumentReplacementIdFactory = (timestamp: number) => string
  * inspection leaves the old Document untouched; nothing is ever copied from
  * the old Document's pipeline data.
  */
+/**
+ * Synchronous pre-commit guard: runs AFTER the awaited source inspection and
+ * immediately BEFORE the replacement transaction, closing the last async
+ * window in which an in-process analysis reservation could land while the
+ * database still shows no running work.
+ */
+export type ReplacementPreCommitGuard = (documentId: string) => void
+
 export class DocumentReplacementService {
   constructor(
     private readonly lifecycle: WorkspaceLifecycleRepository,
@@ -44,7 +53,8 @@ export class DocumentReplacementService {
     private readonly matters: MatterRepository,
     private readonly keys: ApplicationKeys,
     private readonly now: () => number = Date.now,
-    private readonly generateId: DocumentReplacementIdFactory = generateUuidV7
+    private readonly generateId: DocumentReplacementIdFactory = generateUuidV7,
+    private readonly preCommitGuard?: ReplacementPreCommitGuard
   ) {}
 
   async replaceFromPath(documentId: string, filePath: string): Promise<Document> {
@@ -56,6 +66,11 @@ export class DocumentReplacementService {
       // degrades to INTERNAL_ERROR at IPC.
       throw this.toApplicationError(error)
     }
+  }
+
+  /** Inspection seam: the production implementation reads and hashes the file. */
+  protected async inspectSource(filePath: string): Promise<Awaited<ReturnType<typeof inspectDocumentSource>>> {
+    return inspectDocumentSource(filePath)
   }
 
   private async replaceUnchecked(documentId: string, filePath: string): Promise<Document> {
@@ -74,12 +89,16 @@ export class DocumentReplacementService {
     // leaves the old Document exactly as it was.
     let source: Awaited<ReturnType<typeof inspectDocumentSource>>
     try {
-      source = await inspectDocumentSource(filePath)
+      source = await this.inspectSource(filePath)
     } catch (error) {
       throw new DocumentReplacementError('REPLACE_OPERATION_FAILED', 'The replacement source could not be read', {
         cause: error
       })
     }
+    // The inspection await above is the LAST async window before the
+    // transaction; the authoritative reservation guard runs here, on the
+    // synchronous path into lifecycle.replaceDocument.
+    this.preCommitGuard?.(documentId)
     const timestamp = this.now()
     const id = this.generateId(timestamp)
     const eventId = this.generateId(timestamp)
@@ -116,7 +135,7 @@ export class DocumentReplacementService {
     })
   }
 
-  private toApplicationError(error: unknown): DocumentReplacementError {
+  private toApplicationError(error: unknown): DocumentReplacementError | WorkspaceLifecycleError {
     if (error instanceof WorkspaceLifecycleRepositoryError) {
       switch (error.code) {
         case 'MATTER_NOT_FOUND':
@@ -143,6 +162,9 @@ export class DocumentReplacementService {
       }
     }
     if (error instanceof DocumentReplacementError) return error
+    // Pre-commit guard failures carry their own actionable code (DOCUMENT_BUSY
+    // for an in-process analysis reservation) and must surface verbatim.
+    if (error instanceof WorkspaceLifecycleError) return error
     return new DocumentReplacementError('REPLACE_OPERATION_FAILED', 'The replacement failed', { cause: error })
   }
 }

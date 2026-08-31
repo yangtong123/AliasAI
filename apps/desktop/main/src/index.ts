@@ -6,6 +6,7 @@ import { initializeRuntime, type AliasAiRuntime } from './runtime'
 import { runSelfTest } from './self-test'
 import { runProviderSelfTest } from './provider-self-test'
 import { runUiSelfTest } from './ui-self-test'
+import { createQuitCoordinator } from './quit-coordinator'
 import { createHandlerRegistry } from './ipc/handlers'
 import { registerIpcHandlers } from './ipc/register'
 
@@ -114,6 +115,15 @@ if (process.argv.includes('--self-test')) {
       )
 
       createWindow()
+
+      // Two-phase quit gate (see quit-coordinator.ts): every before-quit is
+      // prevented while draining; shutdown orders intake-close -> await runs
+      // -> SQLite-close (including the zero-run path); exactly one quit fires
+      // once settled.
+      const quitCoordinator = createQuitCoordinator(runtime, () => app.quit())
+      app.on('before-quit', (event) => {
+        quitCoordinator.handleBeforeQuit(event, () => event.preventDefault())
+      })
 
       app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow()

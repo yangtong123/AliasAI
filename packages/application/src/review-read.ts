@@ -116,6 +116,8 @@ export interface BlockReviewDTO {
 }
 
 export interface JobSummaryDTO {
+  /** Immutable job identity: distinguishes attempts that share timestamps. */
+  readonly id: string
   readonly type: ProcessingJobType
   readonly status: ProcessingJobStatus
   readonly progress: number
@@ -192,7 +194,7 @@ export class ReviewQueryService {
       document: this.toDocumentSummary(listItem),
       jobs: this.review
         .findLatestJobs(documentId)
-        .map((job) => ({ type: job.type, status: job.status, progress: job.progress, createdAt: job.createdAt }))
+        .map((job) => ({ id: job.id, type: job.type, status: job.status, progress: job.progress, createdAt: job.createdAt }))
     }
   }
 
@@ -248,7 +250,7 @@ export class ReviewQueryService {
     }
     const jobs = this.review
       .findLatestJobs(documentId)
-      .map((job) => ({ type: job.type, status: job.status, progress: job.progress, createdAt: job.createdAt }))
+      .map((job) => ({ id: job.id, type: job.type, status: job.status, progress: job.progress, createdAt: job.createdAt }))
 
     return {
       document: this.toDocumentSummary(listItem),

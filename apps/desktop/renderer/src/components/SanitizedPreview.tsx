@@ -35,7 +35,29 @@ export function SanitizedPreviewView(props: {
     return <p className="empty">{t('preview.empty')}</p>
   }
   if (props.preview.status === 'NOT_READY') {
-    return <p className="empty">{t('preview.notReady', { status: label(props.preview.parseStatus) })}</p>
+    return (
+      <section className="preview">
+        <p className="empty">{t('preview.notReady', { status: label(props.preview.parseStatus) })}</p>
+        {/* A sanitize-owned failure stays recoverable right here: the
+            repository allows regeneration from a failed SANITIZE attempt. */}
+        {props.preview.parseStatus === 'FAILED' && (
+          <>
+            <button
+              type="button"
+              disabled={generate.pending}
+              onClick={() => {
+                void generate.run().then((result) => {
+                  if (result !== null) props.onGenerated()
+                })
+              }}
+            >
+              {t(generate.pending ? 'preview.generating' : 'preview.regeneratePreview')}
+            </button>
+            {generate.error !== null && <p className="error">{formatError(generate.error)}</p>}
+          </>
+        )}
+      </section>
+    )
   }
   if (props.preview.status === 'READY') {
     if (props.preview.blockers.length === 0) {

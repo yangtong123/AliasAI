@@ -91,7 +91,9 @@ export interface AcceptanceChainResult {
 
 /**
  * The shared pipeline chain up to (not including) the AI stage:
- * Matter -> import -> parse -> detect -> resolve -> review -> sanitization.
+ * Matter -> import -> automatic analysis (parse -> detect -> resolve) ->
+ * review -> sanitization. Import triggers no manual stage calls: one
+ * orchestration call must produce the same audited results as a manual run.
  * Both the packaged Mock self-test and the network-provider self-test drive
  * it, so their coverage of the privacy pipeline stays identical.
  */
@@ -106,17 +108,12 @@ export async function runAcceptanceChain(
     const imported = await runtime.services.importDocs.importFromPath(matter.id, sourcePath)
     stage('matter-and-import')
 
-    await runtime.services.processing.process(imported.id)
-    stage('parsed')
-
-    await runtime.services.detection.detect(imported.id)
-    stage('detected')
-
-    await runtime.services.resolution.resolve(imported.id)
+    const analysis = await runtime.services.analysis.analyze(imported.id)
+    assert(analysis.status === 'COMPLETE', 'analysis', 'automatic analysis did not perform fresh work')
     const resolved = runtime.services.reviewQuery.getDocumentReview(imported.id)
     assert(resolved.document.parseStatus === 'READY', 'resolve', 'document did not reach READY')
     assert(resolved.counts.unresolved === 2, 'resolve', 'expected both identifier mentions unresolved')
-    stage('resolved')
+    stage('auto-analyzed')
 
     const mentions = resolved.blocks[0]!.mentions
     const idMention = mentions.find((mention) => mention.type === 'ID_CARD')

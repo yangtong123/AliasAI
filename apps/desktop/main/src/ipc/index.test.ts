@@ -1,9 +1,14 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AiExecutionError, ReviewQueryError } from '@aliasai/application'
+import {
+  DocumentImportError,
+  ReviewQueryError,
+  AiExecutionError
+} from '@aliasai/application'
 import { initializeRuntime, type AliasAiRuntime } from '../runtime'
+import { syntheticPdf } from '../self-test'
 import { createHandlerRegistry, type HandlerRegistry } from './handlers'
 import { ALIASAI_CHANNELS } from './contract'
 import { registerIpcHandlers } from './register'
@@ -157,6 +162,9 @@ describe('IPC handler registry', () => {
   })
 
   it('replaces a document through the picker channel and returns its summary', async () => {
+    const analyzeStub = vi
+      .spyOn(runtime.services.analysis, 'analyze')
+      .mockResolvedValue({ documentId: 'document-replacement', status: 'COMPLETE' })
     const replaceFromPath = vi
       .spyOn(runtime.services.replacement, 'replaceFromPath')
       .mockResolvedValue({
@@ -189,14 +197,19 @@ describe('IPC handler registry', () => {
       data: { id: 'document-replacement', supersedesDocumentId: 'document-old' }
     })
     expect(replaceFromPath).toHaveBeenCalledWith('document-old', '/synthetic/path.pdf')
+    // The replacement — not the superseded Document — enters analysis.
+    expect(analyzeStub).toHaveBeenCalledWith('document-replacement')
+    await runtime.analysisRunner.drain()
 
-    // A cancelled picker is a no-op, and a busy document keeps its code.
+    // A cancelled picker is a no-op that also schedules nothing.
+    analyzeStub.mockClear()
     const cancelledPicker = vi.spyOn(host, 'pickPdf').mockResolvedValue(null)
     try {
       expect(await registry['document:pickAndReplace']({ documentId: 'document-old' })).toEqual({ ok: true, data: null })
     } finally {
       cancelledPicker.mockRestore()
     }
+    expect(analyzeStub).not.toHaveBeenCalled()
     const busy = vi
       .spyOn(runtime.services.replacement, 'replaceFromPath')
       .mockRejectedValue(
@@ -243,6 +256,9 @@ describe('IPC handler registry', () => {
       createdAt: 1,
       updatedAt: 1
     })
+    const analyze = vi
+      .spyOn(runtime.services.analysis, 'analyze')
+      .mockResolvedValue({ documentId: 'document-imported', status: 'COMPLETE' })
     vi.spyOn(runtime.services.reviewQuery, 'listDocuments').mockReturnValue([
       {
         id: 'document-imported',
@@ -261,6 +277,296 @@ describe('IPC handler registry', () => {
       data: { id: 'document-imported' }
     })
     expect(imported).toHaveBeenCalledWith(matter.data.id, '/synthetic/path.pdf')
+    expect(analyze).toHaveBeenCalledWith('document-imported')
+    await runtime.analysisRunner.drain()
+  })
+
+  it('schedules background analysis once per successful import and returns before it completes', async () => {
+    const matter = await registry['matter:create']({ name: 'Synthetic Auto Matter' })
+    expect(matter.ok).toBe(true)
+    if (!matter.ok) return
+    vi.spyOn(runtime.services.importDocs, 'importFromPath').mockResolvedValue({
+      id: 'document-imported',
+      matterId: matter.data.id,
+      fileHash: 'synthetic-hash',
+      mimeType: 'application/pdf',
+      parseStatus: 'IMPORTED',
+      createdAt: 1,
+      updatedAt: 1
+    })
+    vi.spyOn(runtime.services.reviewQuery, 'listDocuments').mockReturnValue([
+      {
+        id: 'document-imported',
+        matterId: matter.data.id,
+        originalName: 'synthetic.pdf',
+        mimeType: 'application/pdf',
+        parseStatus: 'IMPORTED',
+        pageCount: undefined,
+        createdAt: 1,
+        updatedAt: 1
+      }
+    ])
+    // The analysis promise is gated: the IPC response must not wait for it.
+    let releaseAnalysis!: () => void
+    const gate = new Promise<void>((release) => {
+      releaseAnalysis = release
+    })
+    const analyze = vi
+      .spyOn(runtime.services.analysis, 'analyze')
+      .mockImplementation(() => gate.then(() => ({ documentId: 'document-imported', status: 'ALREADY_COMPLETE' as const })))
+    // document:analyze validates through the read model before registering;
+    // the synthetic import has no real database row.
+    vi.spyOn(runtime.services.reviewQuery, 'getDocumentStatus').mockImplementation((documentId: string) => ({
+      document: {
+        id: documentId,
+        matterId: matter.data.id,
+        originalName: 'synthetic.pdf',
+        mimeType: 'application/pdf',
+        parseStatus: 'IMPORTED' as const,
+        pageCount: undefined,
+        createdAt: 1,
+        updatedAt: 1
+      },
+      jobs: []
+    }))
+
+    const result = await registry['document:pickAndImport']({ matterId: matter.data.id })
+    expect(result).toMatchObject({ ok: true, data: { id: 'document-imported' } })
+    expect(analyze).toHaveBeenCalledTimes(1)
+    expect(analyze).toHaveBeenCalledWith('document-imported')
+    expect(runtime.analysisRunner.activeCount).toBe(1)
+
+    // A duplicate schedule for the same Document inside this process is
+    // accepted:false, not an error, and does not start a second pipeline.
+    expect(await registry['document:analyze']({ documentId: 'document-imported' })).toEqual({
+      ok: true,
+      data: { accepted: false }
+    })
+    expect(analyze).toHaveBeenCalledTimes(1)
+
+    releaseAnalysis()
+    await runtime.analysisRunner.drain()
+    expect(runtime.analysisRunner.activeCount).toBe(0)
+    // After the run settles an explicit retry starts a fresh run.
+    analyze.mockResolvedValue({ documentId: 'document-imported', status: 'COMPLETE' })
+    expect(await registry['document:analyze']({ documentId: 'document-imported' })).toEqual({
+      ok: true,
+      data: { accepted: true }
+    })
+    await runtime.analysisRunner.drain()
+  })
+
+  it('keeps automatic ownership while a compatibility parse channel is live, then continues downstream', async () => {
+    const documentId = 'document-compatibility-race'
+    const matterId = 'matter-compatibility-race'
+    let parseStatus: 'PARSING' | 'PARSED' | 'DETECTED' | 'READY' = 'PARSING'
+    let releaseExternalParse!: () => void
+    const externalParseGate = new Promise<void>((resolve) => {
+      releaseExternalParse = resolve
+    })
+    const summary = () => ({
+      id: documentId,
+      matterId,
+      originalName: 'compatibility-race.pdf',
+      mimeType: 'application/pdf',
+      parseStatus,
+      pageCount: parseStatus === 'PARSING' ? undefined : 1,
+      createdAt: 1,
+      updatedAt: parseStatus === 'PARSING' ? 1 : parseStatus === 'PARSED' ? 2 : parseStatus === 'DETECTED' ? 3 : 4
+    })
+    vi.spyOn(runtime.services.reviewQuery, 'getDocumentStatus').mockImplementation(() => ({
+      document: summary(),
+      jobs: []
+    }))
+    const process = vi.spyOn(runtime.services.processing, 'process').mockImplementation(async () => {
+      parseStatus = 'PARSING'
+      await externalParseGate
+      parseStatus = 'PARSED'
+      return summary() as never
+    })
+    const detect = vi.spyOn(runtime.services.detection, 'detect').mockImplementation(async () => {
+      expect(parseStatus).toBe('PARSED')
+      parseStatus = 'DETECTED'
+      return {} as never
+    })
+    const resolve = vi.spyOn(runtime.services.resolution, 'resolve').mockImplementation(async () => {
+      expect(parseStatus).toBe('DETECTED')
+      parseStatus = 'READY'
+      return {} as never
+    })
+
+    const compatibilityRun = registry['document:process']({ documentId })
+    await vi.waitFor(() => expect(process).toHaveBeenCalledOnce())
+    expect(await registry['document:analyze']({ documentId })).toEqual({
+      ok: true,
+      data: { accepted: true }
+    })
+
+    // Give the automatic service time to observe PARSING. The old behavior
+    // returned ALREADY_COMPLETE here and released the runner slot.
+    await new Promise((resolveWait) => setTimeout(resolveWait, 20))
+    expect(runtime.analysisRunner.isActive(documentId)).toBe(true)
+    expect(detect).not.toHaveBeenCalled()
+
+    releaseExternalParse()
+    await compatibilityRun
+    await runtime.analysisRunner.drain()
+    expect(detect).toHaveBeenCalledOnce()
+    expect(resolve).toHaveBeenCalledOnce()
+    expect(parseStatus).toBe('READY')
+  })
+
+  it('schedules nothing when the picker is cancelled or the import fails', async () => {
+    const matter = await registry['matter:create']({ name: 'Synthetic Cancelled Import' })
+    expect(matter.ok).toBe(true)
+    if (!matter.ok) return
+    const analyze = vi.spyOn(runtime.services.analysis, 'analyze')
+    const cancelledPicker = vi.spyOn(host, 'pickPdf').mockResolvedValue(null)
+    try {
+      expect(await registry['document:pickAndImport']({ matterId: matter.data.id })).toEqual({ ok: true, data: null })
+    } finally {
+      cancelledPicker.mockRestore()
+    }
+    vi.spyOn(runtime.services.importDocs, 'importFromPath').mockRejectedValue(
+      new DocumentImportError('IMPORT_FAILED', 'Document could not be imported')
+    )
+    expect(await registry['document:pickAndImport']({ matterId: matter.data.id })).toMatchObject({
+      ok: false,
+      error: { code: 'IMPORT_FAILED' }
+    })
+    expect(analyze).not.toHaveBeenCalled()
+    expect(runtime.analysisRunner.activeCount).toBe(0)
+  })
+
+  it('rejects document:analyze for unavailable documents with a coded error', async () => {
+    const analyze = vi.spyOn(runtime.services.analysis, 'analyze')
+    expect(await registry['document:analyze']({})).toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR' } })
+    expect(await registry['document:analyze']({ documentId: 'missing-document' })).toEqual({
+      ok: false,
+      error: { code: 'DOCUMENT_NOT_FOUND', message: 'Document was not found' }
+    })
+    expect(analyze).not.toHaveBeenCalled()
+    expect(runtime.analysisRunner.activeCount).toBe(0)
+  })
+
+  it('rejects replacement when analysis registers during the real source inspection', async () => {
+    // A real imported document, a real replacement source file, and a gated
+    // inspection seam: the authoritative guard must fire on the post-inspection
+    // synchronous path even though the database still shows no running work.
+    const created = await registry['matter:create']({ name: 'Synthetic Replace Inspection Race' })
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+    const directory = await mkdtemp(join(tmpdir(), 'aliasai-replace-race-'))
+    directories.push(directory)
+    const originalPath = join(directory, 'original.pdf')
+    await writeFile(originalPath, syntheticPdf('Original Holder synthetic@example.test.'))
+    const replacementPath = join(directory, 'replacement.pdf')
+    await writeFile(replacementPath, syntheticPdf('Replacement Holder synthetic@example.test.'))
+    const imported = await runtime.services.importDocs.importFromPath(created.data.id, originalPath)
+
+    const picker = vi.spyOn(host, 'pickPdf').mockResolvedValue(replacementPath)
+    let releaseInspection!: (value: unknown) => void
+    const inspectionGate = new Promise<unknown>((resolve) => {
+      releaseInspection = resolve
+    })
+    const inspectSpy = vi
+      .spyOn(runtime.services.replacement as never as { inspectSource: (path: string) => Promise<unknown> }, 'inspectSource')
+      .mockReturnValue(inspectionGate)
+
+    const pending = registry['document:pickAndReplace']({ documentId: imported.id })
+    // Prove inspection has actually started BEFORE the runner reservation lands.
+    // A guard incorrectly placed before inspectSource would already have passed
+    // at this point, so the final DOCUMENT_BUSY assertion would turn red.
+    await vi.waitFor(() => expect(inspectSpy).toHaveBeenCalledWith(replacementPath))
+
+    // While the real inspection hangs, a scheduled analysis registers the document.
+    let releaseAnalysis!: () => void
+    const analysisGate = new Promise<void>((release) => {
+      releaseAnalysis = release
+    })
+    vi.spyOn(runtime.services.analysis, 'analyze').mockImplementation((documentId: string) =>
+      analysisGate.then(() => ({ documentId, status: 'ALREADY_COMPLETE' as const }))
+    )
+    expect(runtime.analysisRunner.start(imported.id)).toBe(true)
+
+    releaseInspection({
+      sourcePath: replacementPath,
+      originalName: 'replacement.pdf',
+      fileHash: 'synthetic-replacement-hash',
+      mimeType: 'application/pdf'
+    })
+    expect(await pending).toEqual({
+      ok: false,
+      error: { code: 'DOCUMENT_BUSY', message: 'Document analysis is scheduled or running' }
+    })
+    // The old Document is untouched by the refused replacement.
+    const after = runtime.services.reviewQuery.getDocumentStatus(imported.id)
+    expect(after.document.id).toBe(imported.id)
+
+    releaseAnalysis()
+    await runtime.analysisRunner.drain()
+    picker.mockRestore()
+    inspectSpy.mockRestore()
+  })
+
+  it('refuses to trash or replace a document with a scheduled-but-unstarted analysis', async () => {
+    const created = await registry['matter:create']({ name: 'Synthetic Scheduled Trash Guard' })
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+    // Gated analysis promise: the runner holds the reservation while the
+    // document is still persisted as IMPORTED with no RUNNING job — exactly
+    // the setImmediate window where database-only lifecycle checks pass.
+    let releaseAnalysis!: () => void
+    const gate = new Promise<void>((release) => {
+      releaseAnalysis = release
+    })
+    vi.spyOn(runtime.services.analysis, 'analyze').mockImplementation((documentId: string) =>
+      gate.then(() => ({ documentId, status: 'ALREADY_COMPLETE' as const }))
+    )
+    expect(runtime.analysisRunner.start('document-scheduled-guard')).toBe(true)
+
+    expect(await registry['document:trash']({ documentId: 'document-scheduled-guard' })).toEqual({
+      ok: false,
+      error: { code: 'DOCUMENT_BUSY', message: 'Document analysis is scheduled or running' }
+    })
+    expect(await registry['document:pickAndReplace']({ documentId: 'document-scheduled-guard' })).toEqual({
+      ok: false,
+      error: { code: 'DOCUMENT_BUSY', message: 'Document analysis is scheduled or running' }
+    })
+
+    // Once the reservation settles, the same operation passes the guard again
+    // (the lifecycle service itself is mocked because this synthetic document
+    // has no database row; the guard under test runs before it).
+    releaseAnalysis()
+    await runtime.analysisRunner.drain()
+    const trashDocument = vi
+      .spyOn(runtime.services.lifecycle, 'trashDocument')
+      .mockReturnValue({ changed: true })
+    expect(await registry['document:trash']({ documentId: 'document-scheduled-guard' })).toEqual({
+      ok: true,
+      data: { changed: true }
+    })
+    trashDocument.mockRestore()
+  })
+
+  it('drains scheduled analysis before runtime close leaves anything active', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((done) => {
+      release = done
+    })
+    vi.spyOn(runtime.services.analysis, 'analyze').mockImplementation(() => gate.then(() => ({
+      documentId: 'stalled-document',
+      status: 'COMPLETE' as const
+    })))
+    // Reach into the runner directly: scheduling is its documented surface and
+    // a full import setup is covered by the tests above.
+    expect(runtime.analysisRunner.start('document-drain')).toBe(true)
+    expect(runtime.analysisRunner.activeCount).toBe(1)
+    release()
+    await runtime.analysisRunner.drain()
+    expect(runtime.analysisRunner.activeCount).toBe(0)
+    runtime.close()
+    expect(runtime.analysisRunner.start('document-after-close')).toBe(false)
   })
 
   it('validates payloads with field-level errors', async () => {

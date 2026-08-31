@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- Automatic analysis with a result-first review (导入即分析): importing or
+  one-step replacing a PDF now schedules the full parse → privacy detection →
+  entity resolution pipeline automatically in the Electron main process and
+  returns the new Document summary immediately, so the workspace selects the
+  new Document and shows friendly progress — 等待分析… / 正在读取文档… /
+  正在识别敏感信息… / 正在整理人物和机构关系… / 分析完成 — instead of three
+  manual stage buttons. The orchestration composes the existing audited
+  services (no new transactions, no schema change), re-reads persisted status
+  between stages, deduplicates concurrent starts per Document in-process
+  (`document:analyze` + background runner), resumes interrupted
+  IMPORTED/PARSED/DETECTED Documents once on selection, exposes exactly one
+  重新分析 action for an analysis-owned failure attributed by persisted job
+  evidence, leaves sanitization failures to the preview workflow, drains
+  active runs on graceful quit, and never auto-retries in a loop.
+- Result-first review UI: the review page leads with a plain-language outcome
+  summary (发现 N 处敏感信息，X 处已处理，Y 处需要确认) built from mutually
+  exclusive Mention decision buckets; each selected item shows its detected
+  text, friendly type, result state (已自动处理/需要确认/已手工修改/不是敏感信息),
+  ownership as 属于：<化名>, one-line guidance, and state-appropriate actions
+  (确认归属 opens the existing correction controls). Detector confidence,
+  strength, candidate scores, and raw enums move behind 技术详情; create/
+  assign, rename, merge/split, constraints, and the Entity/token list stay
+  reachable behind 高级身份管理; missed detections collapse into one 补充标记
+  entry. All copy ships in Simplified Chinese and English.
+- Compact document actions: the two inline list buttons become one ⋯ overflow
+  menu per row (`aria-haspopup="menu"`, `menu`/`menuitem`, accessible name,
+  single-open, Escape/outside-
+  click close with focus returned), so long filenames and statuses are never
+  obscured; trash/replace keep their explicit confirmations rendered below the
+  row at full sidebar width.
 - One-step Document replacement (用新 PDF 替换… / Replace with new PDF…):
   picking a replacement file atomically trashes the old Document, creates the
   replacement as a new active Document recording `supersedes_document_id`

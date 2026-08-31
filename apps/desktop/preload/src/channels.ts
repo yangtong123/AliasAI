@@ -11,6 +11,7 @@ export const CHANNELS = [
   'document:pickAndImport',
   'document:list',
   'document:get',
+  'document:analyze',
   'document:process',
   'document:detect',
   'document:resolve',

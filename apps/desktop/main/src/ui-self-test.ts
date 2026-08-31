@@ -105,11 +105,19 @@ const UI_DRIVER = String.raw`
       .join(' | ')
       .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+/gi, '[redacted-email]')
       .replace(/\d{5,}/g, '[redacted-number]');
-    throw new Error('ui self-test timed out: ' + description + '; visible controls: ' + visible);
+    const analysisPanel = document.querySelector('.analysis-status')?.textContent ?? '(none)';
+    const summaryPanel = document.querySelector('.result-summary')?.textContent ?? '(none)';
+    const badges = Array.from(document.querySelectorAll('.badge')).map((node) => node.textContent.trim()).join(',');
+    throw new Error('ui self-test timed out: ' + description
+      + '; visible controls: ' + visible
+      + ' | analysis=' + analysisPanel.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+/gi, '[redacted-email]').replace(/\d{5,}/g, '[redacted-number]')
+      + ' | summary=' + summaryPanel.slice(0, 160)
+      + ' | badges=' + badges);
   };
-  const buttons = () => Array.from(document.querySelectorAll('button'));
+  const buttons = () => Array.from(document.querySelectorAll('button, summary'));
   const button = (label) => buttons().find(
-    (candidate) => candidate.textContent.trim() === label && !candidate.disabled
+    (candidate) => candidate.textContent.trim() === label
+      && (!(candidate instanceof HTMLButtonElement) || !candidate.disabled)
   );
   const click = async (label) => {
     const target = await waitFor(() => button(label), 'button ' + label);
@@ -124,6 +132,10 @@ const UI_DRIVER = String.raw`
     setter.call(input, value);
     input.dispatchEvent(new Event('input', { bubbles: true }));
   };
+  const documentRow = () => buttons().find(
+    (candidate) => candidate.className.includes('doc-select')
+      && candidate.textContent.startsWith('synthetic-ui.pdf')
+  );
   const stage = (name) => stages.push(name);
 
   const bridgeProbe = await window.aliasAi.invoke('matter:list', {});
@@ -147,23 +159,37 @@ const UI_DRIVER = String.raw`
   stage('matter-created');
 
   await click('导入 PDF…');
-  await click('synthetic-ui.pdf 已导入');
+  stage('import-clicked');
+  // The import response returns immediately and selects the new Document; the
+  // parse/detect/resolve pipeline runs automatically in the main process.
+  await waitFor(() => documentRow(), 'imported document row');
+  documentRow().click();
+  stage('row-selected');
+  await waitFor(
+    () => document.querySelector('.content h2'),
+    'content header after selecting the new Document'
+  );
   stage('document-imported');
 
-  await click('运行解析');
-  await click('运行隐私检测');
-  await click('运行实体解析');
-  await waitFor(() => document.querySelector('[title^="身份证号"]'), 'ID_CARD mention');
-  stage('pipeline-ready');
+  // No manual stage buttons exist anymore: reaching READY is purely automatic.
+  await waitFor(() => document.querySelector('[title^="身份证号"]'), 'ID_CARD mention after automatic analysis', 120000);
+  stage('auto-analyzed');
 
   document.querySelector('[title^="身份证号"]').click();
+  await click('确认归属');
+  await click('高级身份管理');
   await setInput('新实体的化名（例如“原告甲”）', 'Holder One');
   await click('创建实体并分配');
   await waitFor(() => document.querySelector('.mention-detail strong')?.textContent === 'Holder One', 'ID assignment');
   await click('确认');
-  await waitFor(() => button('已确认') || buttons().find((candidate) => candidate.textContent.trim() === '已确认'), 'ID confirmation');
+  await waitFor(
+    () => buttons().find((candidate) => candidate.textContent.trim() === '已确认'),
+    'ID confirmation'
+  );
 
   document.querySelector('[title^="电子邮箱"]').click();
+  await click('确认归属');
+  await click('高级身份管理');
   const picker = await waitFor(() => document.querySelector('.entity-picker select'), 'entity picker');
   const option = Array.from(picker.options).find((candidate) => candidate.textContent.includes('Holder One'));
   if (!option) throw new Error('ui self-test failed: Holder One was absent from entity picker');
@@ -171,8 +197,15 @@ const UI_DRIVER = String.raw`
   picker.dispatchEvent(new Event('change', { bubbles: true }));
   await waitFor(() => document.querySelector('.mention-detail strong')?.textContent === 'Holder One', 'email assignment');
   await click('确认');
-  await waitFor(() => button('已确认') || buttons().find((candidate) => candidate.textContent.trim() === '已确认'), 'email confirmation');
-  await waitFor(() => document.querySelector('.counts')?.textContent.includes('已解析 2 处'), 'both assignments');
+  await waitFor(
+    () => buttons().find((candidate) => candidate.textContent.trim() === '已确认'),
+    'email confirmation'
+  );
+  // The result summary reflects both handled items and zero confirmations.
+  await waitFor(() => {
+    const text = document.querySelector('.result-summary')?.textContent ?? '';
+    return text.includes('2 处已处理') && text.includes('0 处需要确认');
+  }, 'both assignments in result summary');
   stage('review-completed');
 
   await click('脱敏预览');

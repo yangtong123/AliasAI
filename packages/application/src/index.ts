@@ -155,6 +155,7 @@ export class EntityService {
 }
 
 export * from './document-processing'
+export * from './document-analysis'
 export * from './privacy-detection'
 export * from './entity-resolution'
 export * from './sanitization'

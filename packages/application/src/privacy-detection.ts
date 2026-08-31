@@ -19,7 +19,9 @@ export class PrivacyDetectionError extends Error {
   constructor(
     readonly code: string,
     message: string,
-    options?: ErrorOptions
+    options?: ErrorOptions,
+    /** Stage ownership exists, but its failure-finalizing write did not finish. */
+    readonly analysisOwner?: { readonly jobId?: string }
   ) {
     super(message, options)
     this.name = 'PrivacyDetectionError'
@@ -152,7 +154,8 @@ export class PrivacyDetectionService {
         throw new PrivacyDetectionError(
           'PERSISTENCE_FAILURE',
           'Privacy detection failed and its state could not be finalized',
-          { cause: new AggregateError([failure, stateError]) }
+          { cause: new AggregateError([failure, stateError]) },
+          { jobId }
         )
       }
       throw failure

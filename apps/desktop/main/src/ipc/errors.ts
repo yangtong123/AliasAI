@@ -1,5 +1,6 @@
 import {
   AiExecutionError,
+  DocumentAnalysisError,
   DocumentImportError,
   DocumentProcessingError,
   DocumentReplacementError,
@@ -14,6 +15,7 @@ import { OpenAiCompatibleProviderError } from '@aliasai/ai'
 import { PythonRuntimeError } from '../runtime'
 import { AiProviderConfigError } from '../ai-provider'
 import { KeyStoreError } from '../keys'
+import { IpcShutdownError } from '../ipc-operations'
 import { IpcValidationError } from './validate'
 
 export type IpcResult<T> = { readonly ok: true; readonly data: T } | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
@@ -26,6 +28,7 @@ interface CodedError {
 function isCodedError(error: unknown): error is CodedError {
   return (
     error instanceof AiExecutionError ||
+    error instanceof DocumentAnalysisError ||
     error instanceof DocumentProcessingError ||
     error instanceof PrivacyDetectionError ||
     error instanceof EntityResolutionError ||
@@ -39,7 +42,8 @@ function isCodedError(error: unknown): error is CodedError {
     error instanceof PythonRuntimeError ||
     error instanceof AiProviderConfigError ||
     error instanceof OpenAiCompatibleProviderError ||
-    error instanceof IpcValidationError
+    error instanceof IpcValidationError ||
+    error instanceof IpcShutdownError
   )
 }
 

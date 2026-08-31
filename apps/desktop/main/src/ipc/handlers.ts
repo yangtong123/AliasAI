@@ -1,4 +1,6 @@
 import type { DocumentSummaryDTO } from '@aliasai/application'
+import { DocumentAnalysisError, WorkspaceLifecycleError } from '@aliasai/application'
+import { IpcShutdownError } from '../ipc-operations'
 import { IpcValidationError, optionalBoolean, optionalText, requireEnum, requireId, requireNonNegativeInteger, requireText } from './validate'
 import { toIpcResult, type IpcResult } from './errors'
 import type { AliasAiChannel, AliasAiInvokeMap } from './contract'
@@ -25,8 +27,37 @@ export type HandlerRegistry = {
  */
 export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost): HandlerRegistry {
   const { services } = runtime
+  // Every handler executes under shutdown protection: in-flight operations
+  // are awaited by runtime.shutdown() before SQLite closes, and operations
+  // arriving after shutdown began fail fast with a coded envelope.
+  const guarded = <T>(operation: () => Promise<T>): Promise<T> => runtime.ipcOperations.run(operation)
 
-  const documentStatus = (documentId: string) => services.reviewQuery.getDocumentStatus(documentId)
+  const persistedDocumentStatus = (documentId: string) => services.reviewQuery.getDocumentStatus(documentId)
+  const documentStatus = (documentId: string) => {
+    const status = persistedDocumentStatus(documentId)
+    if (status.document.parseStatus === 'READY' || status.document.parseStatus === 'SANITIZED') {
+      runtime.analysisRunner.clearFailure(documentId)
+    }
+    if (runtime.analysisRunner.failureFor(documentId) !== undefined) {
+      throw new DocumentAnalysisError(
+        'ANALYSIS_FAILURE_UNRECORDED',
+        'Automatic analysis stopped before its failure could be saved'
+      )
+    }
+    return status
+  }
+  /**
+   * A scheduled analysis occupies the runner BEFORE any persisted state or
+   * RUNNING job exists (the orchestrator defers into a fresh macrotask), so
+   * lifecycle guards that only inspect the database would let a Document be
+   * trashed mid-schedule. The runner's in-process reservation closes that
+   * window: trashing something it is about to analyze is a busy failure.
+   */
+  const assertNoScheduledAnalysis = (documentId: string): void => {
+    if (runtime.analysisRunner.isActive(documentId)) {
+      throw new WorkspaceLifecycleError('DOCUMENT_BUSY', 'Document analysis is scheduled or running')
+    }
+  }
   const importedSummary = async (matterId: string, documentId: string): Promise<DocumentSummaryDTO> => {
     const found = services.reviewQuery.listDocuments(matterId).find((document) => document.id === documentId)
     if (found === undefined) throw new Error('imported document summary was not found')
@@ -46,7 +77,7 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
       : { text: execution.rehydratedResponse, suggestedName: 'AliasAI-restored-response.txt' }
   }
 
-  return {
+  const buildHandlers = (): HandlerRegistry => ({
     'matter:list': (payload) =>
       toIpcResult(() => {
         requireEmpty(payload)
@@ -63,7 +94,13 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
     'matter:trash': (payload) =>
       toIpcResult(() => {
         const matterId = requireId(readField(payload, 'matterId'), 'matterId')
-        return services.lifecycle.trashMatter(matterId)
+        const matterDocuments = services.reviewQuery.listDocuments(matterId)
+        for (const document of matterDocuments) {
+          assertNoScheduledAnalysis(document.id)
+        }
+        const result = services.lifecycle.trashMatter(matterId)
+        for (const document of matterDocuments) runtime.analysisRunner.clearFailure(document.id)
+        return result
       }),
     'matter:restore': (payload) =>
       toIpcResult(() => {
@@ -81,7 +118,12 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
         const filePath = await host.pickPdf()
         if (filePath === null) return null
         const imported = await services.importDocs.importFromPath(matterId, filePath)
-        return importedSummary(matterId, imported.id)
+        const summary = await importedSummary(matterId, imported.id)
+        // Analysis continues in the background; the renderer gets its summary
+        // immediately. A scheduling refusal leaves the Document visible with
+        // its persisted state and never rolls back the import.
+        runtime.analysisRunner.start(imported.id)
+        return summary
       }),
     'document:list': (payload) =>
       toIpcResult(() => {
@@ -93,28 +135,47 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
         const documentId = requireId(readField(payload, 'documentId'), 'documentId')
         return documentStatus(documentId)
       }),
+    // Automatic analysis entry point: validates availability, registers the
+    // background run, and returns without waiting for any pipeline stage.
+    'document:analyze': (payload) =>
+      toIpcResult(() => {
+        const documentId = requireId(readField(payload, 'documentId'), 'documentId')
+        // Unknown, trashed, or Matter-deleted Documents fail closed here with
+        // the coded DOCUMENT_NOT_FOUND error instead of a background failure.
+        persistedDocumentStatus(documentId)
+        return { accepted: runtime.analysisRunner.start(documentId) }
+      }),
+    // Diagnostic/compatibility stage channels for this milestone: kept so
+    // tooling and tests can drive single stages, but no production renderer
+    // component calls them — document:analyze composes the full pipeline.
     'document:process': (payload) =>
       toIpcResult(async () => {
         const documentId = requireId(readField(payload, 'documentId'), 'documentId')
         await services.processing.process(documentId)
+        runtime.analysisRunner.clearFailure(documentId)
         return documentStatus(documentId)
       }),
     'document:detect': (payload) =>
       toIpcResult(async () => {
         const documentId = requireId(readField(payload, 'documentId'), 'documentId')
         await services.detection.detect(documentId)
+        runtime.analysisRunner.clearFailure(documentId)
         return documentStatus(documentId)
       }),
     'document:resolve': (payload) =>
       toIpcResult(async () => {
         const documentId = requireId(readField(payload, 'documentId'), 'documentId')
         await services.resolution.resolve(documentId)
+        runtime.analysisRunner.clearFailure(documentId)
         return documentStatus(documentId)
       }),
     'document:trash': (payload) =>
       toIpcResult(() => {
         const documentId = requireId(readField(payload, 'documentId'), 'documentId')
-        return services.lifecycle.trashDocument(documentId)
+        assertNoScheduledAnalysis(documentId)
+        const result = services.lifecycle.trashDocument(documentId)
+        runtime.analysisRunner.clearFailure(documentId)
+        return result
       }),
     'document:restore': (payload) =>
       toIpcResult(() => {
@@ -124,10 +185,19 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
     'document:pickAndReplace': (payload) =>
       toIpcResult(async () => {
         const documentId = requireId(readField(payload, 'documentId'), 'documentId')
+        // Fail fast before opening the picker…
+        assertNoScheduledAnalysis(documentId)
         const filePath = await host.pickPdf()
         if (filePath === null) return null
+        // The AUTHORITATIVE check lives inside the replacement service: it
+        // runs after the awaited source inspection, on the synchronous path
+        // into the transaction (see DocumentReplacementService.preCommitGuard).
         const replaced = await services.replacement.replaceFromPath(documentId, filePath)
-        return importedSummary(replaced.matterId, replaced.id)
+        runtime.analysisRunner.clearFailure(documentId)
+        const summary = await importedSummary(replaced.matterId, replaced.id)
+        // The replacement — not the superseded Document — is analyzed.
+        runtime.analysisRunner.start(replaced.id)
+        return summary
       }),
     'review:getDocument': (payload) =>
       toIpcResult(() => {
@@ -303,7 +373,31 @@ export function createHandlerRegistry(runtime: AliasAiRuntime, host: HandlerHost
         }
         return services.aiProvider.testConnection(input)
       })
+  })
+
+  // Wrap every entry under shutdown protection AFTER construction so each
+  // in-flight operation is visible to runtime.shutdown() and late arrivals
+  // fail fast with the coded APP_SHUTTING_DOWN envelope.
+  const entries: Readonly<Record<string, (payload: unknown) => Promise<unknown>>> = buildHandlers()
+  // The shutdown wrapper is uniform across channels; the final cast restores
+  // the exact per-channel HandlerRegistry typing.
+  const wrapped: Record<string, (payload: unknown) => Promise<unknown>> = {}
+  for (const [channel, handler] of Object.entries(entries)) {
+    // Handlers already produce IpcResult envelopes; the shutdown refusal is
+    // the one raw rejection `guarded` can produce, mapped here to keep every
+    // channel non-throwing.
+    wrapped[channel] = async (payload: unknown) => {
+      try {
+        return await guarded(() => handler(payload))
+      } catch (error) {
+        if (error instanceof IpcShutdownError) {
+          return { ok: false, error: { code: error.code, message: error.message } }
+        }
+        throw error
+      }
+    }
   }
+  return wrapped as HandlerRegistry
 }
 
 function readField(payload: unknown, field: string): unknown {

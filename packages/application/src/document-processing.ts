@@ -29,7 +29,9 @@ export class DocumentProcessingError extends Error {
   constructor(
     readonly code: string,
     message: string,
-    options?: ErrorOptions
+    options?: ErrorOptions,
+    /** Stage ownership exists, but its failure-finalizing write did not finish. */
+    readonly analysisOwner?: { readonly jobId?: string }
   ) {
     super(message, options)
     this.name = 'DocumentProcessingError'
@@ -190,7 +192,8 @@ export class DocumentProcessingService {
         throw new DocumentProcessingError(
           'PERSISTENCE_FAILURE',
           'Document processing failed and its state could not be finalized',
-          { cause: new AggregateError([failure, stateError]) }
+          { cause: new AggregateError([failure, stateError]) },
+          {}
         )
       }
       throw failure
